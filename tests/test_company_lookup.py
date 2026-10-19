@@ -496,6 +496,33 @@ def test_website_lookup_reads_about_page_and_wikidata_p856(monkeypatch):
     assert "Q1" not in json.dumps({key: value for key, value in found.items() if key != "logo_png"})
 
 
+def test_website_lookup_prefers_the_company_that_has_a_headquarters(monkeypatch):
+    entities = {
+        "Q1": _entity("List of Northwind brands", {"P856": [_claim("https://www.northwind.example/")]}, "Wikimedia list article"),
+        "Q2": _entity(
+            "Northwind",
+            {
+                "P856": [_claim("https://northwind.example")],
+                "P159": [_claim({"entity-type": "item", "id": "Q100"})],
+            },
+            "retailer",
+        ),
+        "Q100": _entity("Bentonville", {"P131": [_claim({"entity-type": "item", "id": "Q300"})]}),
+        "Q300": _entity("Arkansas", {}),
+    }
+    # Label lives in Wikidata's default language, not English.
+    entities["Q2"]["labels"] = {"mul": {"value": "Northwind Goods"}}
+    monkeypatch.setattr(
+        "freight.company_lookup.http_request",
+        _website_router({}, sparql_ids=["Q1", "Q2"], entities=entities),
+    )
+    found = lookup_by_website("northwind.example")
+    assert found["name"] == "Northwind Goods"
+    assert found["city"] == "Bentonville"
+    assert found["state"] == "AR"
+    assert found["address_source"] == SOURCE_WIKIDATA
+
+
 def test_website_lookup_uses_wikidata_name_when_the_page_name_is_the_domain(monkeypatch):
     html = """
     <html><head>

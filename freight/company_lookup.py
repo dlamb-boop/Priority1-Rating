@@ -349,6 +349,7 @@ def _lookup_domain(domain: str, places_key: str) -> dict:
     logo, logo_source = _best_logo(logo_filename, domain, assets)
     result["logo_png"] = logo
     result["logo_source"] = logo_source
+    result.pop("logo_filename", None)
     result["found"] = bool(result["name"] or result["street"] or result["city"] or result["logo_png"])
     return result
 
@@ -581,7 +582,7 @@ def _fetch_entities(qids: list[str]) -> dict[str, dict]:
                 "action": "wbgetentities",
                 "ids": "|".join(batch),
                 "props": "claims|labels|descriptions",
-                "languages": "en",
+                "languages": "en|mul",
                 "format": "json",
             }
         )
@@ -654,8 +655,14 @@ def _qualifier_text(claim: dict, pid: str) -> str:
 
 
 def _entity_label(entity: dict) -> str:
-    label = ((entity.get("labels") or {}).get("en") or {}).get("value")
-    return _plain(label, 120) if isinstance(label, str) else ""
+    labels = entity.get("labels") or {}
+    for lang in ("en", "mul"):
+        label = (labels.get(lang) or {}).get("value")
+        if isinstance(label, str):
+            text = _plain(label, 120)
+            if text:
+                return text
+    return ""
 
 
 def _is_disambiguation(entity: dict) -> bool:
@@ -1261,15 +1268,16 @@ def _commons_thumb(filename: str) -> str:
     return ""
 
 
-def _wikidata_by_domain(domain: str) -> dict | None:
-    """First Wikidata item whose official website (P856) is this domain."""
-    safe = domain.replace("\\", "").replace('"', "")
-    query = (
-        "SELECT ?item ?url WHERE { "
-        "?item wdt:P856 ?url . "
-        f'FILTER(CONTAINS(LCASE(STR(?url)), "{safe}")) '
-        "} LIMIT 8"
-    )
+def _official_site_urls(domain: str) -> list[str]:
+    urls = []
+    for scheme in ("https", "http"):
+        for host in (f"www.{domain}", domain):
+            for suffix in ("/", ""):
+                urls.append(f"{scheme}://{host}{suffix}")
+    return urls
+
+
+def _sparql_qids(query: str) -> list[str]:
     payload = _json_body(
         *http_get(
             f"{WIKIDATA_SPARQL}?{urlencode({'query': query, 'format': 'json'})}",
@@ -1277,7 +1285,7 @@ def _wikidata_by_domain(domain: str) -> dict | None:
         )[:2]
     )
     if not payload:
-        return None
+        return []
     qids: list[str] = []
     for row in (payload.get("results") or {}).get("bindings") or []:
         if not isinstance(row, dict):
@@ -1286,11 +1294,34 @@ def _wikidata_by_domain(domain: str) -> dict | None:
         qid = str(item).rstrip("/").split("/")[-1]
         if qid.startswith("Q") and qid[1:].isdigit() and qid not in qids:
             qids.append(qid)
+    return qids
+
+
+def _wikidata_by_domain(domain: str) -> dict | None:
+    """Wikidata item whose official website (P856) is this domain.
+
+    Exact homepage URLs are tried first. A broader contains-match is the
+    fallback, and a headquarters address outranks a bare name match.
+    """
+    urls = " ".join(f"<{url}>" for url in _official_site_urls(domain))
+    qids = _sparql_qids(
+        "SELECT ?item WHERE { "
+        f"VALUES ?url {{ {urls} }} "
+        "?item wdt:P856 ?url . "
+        "} LIMIT 12"
+    )
+    if not qids:
+        safe = domain.replace("\\", "").replace('"', "")
+        qids = _sparql_qids(
+            "SELECT ?item WHERE { "
+            "?item wdt:P856 ?url . "
+            f'FILTER(CONTAINS(LCASE(STR(?url)), "{safe}")) '
+            "} LIMIT 8"
+        )
     if not qids:
         return None
     entities = _fetch_entities(qids)
-    chosen_id = ""
-    chosen: dict | None = None
+    matches: list[tuple[dict, dict]] = []
     hq_ids: list[str] = []
     for qid in qids:
         entity = entities.get(qid) or {}
@@ -1299,19 +1330,36 @@ def _wikidata_by_domain(domain: str) -> dict | None:
         websites = [_snak_text(claim.get("mainsnak") or {}) for claim in _claims(entity, "P856")]
         if not any(normalize_domain(website) == domain for website in websites):
             continue
-        chosen_id = qid
-        chosen = entity
         for claim in _claims(entity, "P159"):
             hq_id = _entity_id(claim)
             if hq_id:
                 hq_ids.append(hq_id)
-        break
-    if not chosen:
+        candidate = _candidate_from_entity(entity, {"id": qid, "label": _entity_label(entity), "rank": len(matches)})
+        matches.append((entity, candidate))
+    if not matches:
         return None
     _fetch_admin_chain(entities, hq_ids)
-    candidate = _candidate_from_entity(chosen, {"id": chosen_id, "label": _entity_label(chosen), "rank": 0})
-    _wikidata_candidates_finalize([candidate], entities)
-    return candidate
+    finalized = [candidate for _entity, candidate in matches]
+    _wikidata_candidates_finalize(finalized, entities)
+    ranked = sorted(matches, key=lambda pair: _domain_match_rank(pair[0], pair[1]))
+    return ranked[0][1]
+
+
+def _domain_match_rank(entity: dict, candidate: dict) -> tuple:
+    description = ((entity.get("descriptions") or {}).get("en") or {}).get("value") or ""
+    if not isinstance(description, str):
+        description = ""
+    description = description.lower()
+    business = _is_business_description(description) and not _is_place_description(description)
+    listed = description.startswith("list ") or "wikimedia list" in description
+    return (
+        0 if business else 1,
+        1 if listed or _is_place_description(description) else 0,
+        0 if candidate.get("city") else 1,
+        0 if candidate.get("logo_filename") else 1,
+        0 if candidate.get("street") else 1,
+        candidate.get("rank", 0),
+    )
 
 
 # The HQ id is stashed on the candidate while entities are still in scope.
