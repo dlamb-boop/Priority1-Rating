@@ -1,0 +1,1 @@
+"""EasyPost freight quote desk."""

@@ -13,3 +13,10 @@ tsconfig.tsbuildinfo
 playwright-report
 test-results
 samples
+
+.streamlit/secrets.toml
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.mypy_cache/

@@ -1,83 +1,124 @@
 # EasyPost Freight Quotes
 
-Internal rating desk for Dawson Lamb. It quotes LTL freight (and truckload, when the account allows it) through Priority1, applies a hidden 5–10% markup, and exports a customer-facing PDF that shows only the sell price.
+Internal rating desk for Dawson Lamb. It quotes LTL freight (and truckload, when the account allows it), applies a hidden 5–10% markup, and exports a customer-facing PDF that shows only the sell price.
 
-No API key is required to try it. With `P1_API_KEY` empty, the app runs in demo mode and returns realistic sample rates.
+The app is a Streamlit desk meant for [Streamlit Community Cloud](https://share.streamlit.io). No API key is required to try it. With `P1_API_KEY` empty, the app runs in demo mode and returns realistic sample rates.
+
+The public URL would expose internal costs, so the desk stays locked until `APP_PASSWORD` is set, and the Community Cloud app should be **private** (invite viewers only). The password is an extra gate, not a substitute for a private app.
+
+## Brand
+
+Colors are sampled from the opaque pixels of the EasyPost wordmark and the August 2026 sales deck (*Intro EasyPost Suite Sales Presentation Extended*).
+
+| Role | Hex | Used for |
+| --- | --- | --- |
+| Primary blue | `#164DFF` | Theme `primaryColor`, buttons, PDF rule, the E in the wordmark |
+| Navy ink | `#061242` | Theme `textColor`, wordmark lettering, PDF headings |
+| White | `#FFFFFF` | Theme `backgroundColor`, page background |
+| Periwinkle wash | `#E8EDFF` | Theme `secondaryBackgroundColor`, sidebar, PDF header |
+| Periwinkle band | `#D0DAFE` | PDF option borders |
+| Mint | `#CBF9EE` | Mode chip, PDF table header |
+| Lilac | `#EAD6FB` | Internal-only costs panel |
+| Muted ink | `#3C4A78` | Captions and secondary PDF text |
+
+Typography follows the deck: Poppins (400 / 500 / 600 / 700), loaded in the app from Google Fonts and embedded in the PDF from `assets/fonts`. Streamlit’s theme `font` key only accepts a generic family, so `.streamlit/config.toml` sets `sans serif` and the stylesheet applies Poppins.
+
+The logo in `assets/easypost-logo.png` is the deck’s embedded wordmark (1600×370) with its soft mask kept as a transparent PNG. The deck does not include a vector logo.
 
 ## Run locally
 
 ```bash
-npm install
-cp .env.example .env.local
-npm run dev
+pip install -r requirements.txt
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+streamlit run streamlit_app.py
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open the URL Streamlit prints (usually http://localhost:8501) and enter the `APP_PASSWORD` from secrets.
+
+Demo mode with environment variables, and no secrets file:
 
 ```bash
-npm test          # markup math and customer-PDF safety
-npm run lint      # TypeScript check
-npm run sample-pdf
+export APP_PASSWORD=choose-a-password
+export P1_API_KEY=
+export P1_BASE_URL=https://dev-api.priority1.com
+export P1_MOCK=true
+streamlit run streamlit_app.py
 ```
 
-## Environment
+```bash
+pytest
+```
 
-| Variable | Purpose |
+## Settings
+
+Streamlit secrets win. If a key is absent there, the same name is read from the environment.
+
+| Name | Purpose |
 | --- | --- |
-| `P1_API_KEY` | Priority1 key, sent only as the `X-API-KEY` header from the server. Leave blank for demo mode. |
+| `APP_PASSWORD` | Required. The desk does not load until this matches. |
+| `P1_API_KEY` | Priority1 key, sent only as the `X-API-KEY` header. Leave blank for demo mode. Never shown in the UI. |
 | `P1_BASE_URL` | `https://dev-api.priority1.com` (sandbox, the default) or `https://api.priority1.com` (production). |
-| `P1_MOCK` | Set to `true` to force demo rates even when a key is present. |
+| `P1_MOCK` | `true` forces demo rates even when a key is present. |
 
-The browser never receives the key, the raw Priority1 payload, or upstream quote ids. Copy `.env.example` to `.env.local`. Do not commit `.env.local`.
+Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Do not commit `secrets.toml`.
 
 ### Sandbox and production
 
 Demo (no key):
 
-```bash
-P1_API_KEY=
-P1_BASE_URL=https://dev-api.priority1.com
+```toml
+APP_PASSWORD = "choose-a-password"
+P1_API_KEY = ""
+P1_BASE_URL = "https://dev-api.priority1.com"
+P1_MOCK = "true"
 ```
 
 Sandbox:
 
-```bash
-P1_API_KEY=your-sandbox-key
-P1_BASE_URL=https://dev-api.priority1.com
-P1_MOCK=false
+```toml
+APP_PASSWORD = "choose-a-password"
+P1_API_KEY = "your-sandbox-key"
+P1_BASE_URL = "https://dev-api.priority1.com"
+P1_MOCK = "false"
 ```
 
 Production:
 
-```bash
-P1_API_KEY=your-production-key
-P1_BASE_URL=https://api.priority1.com
-P1_MOCK=false
+```toml
+APP_PASSWORD = "choose-a-password"
+P1_API_KEY = "your-production-key"
+P1_BASE_URL = "https://api.priority1.com"
+P1_MOCK = "false"
 ```
 
-Live rate calls can take up to about 15 seconds because Priority1 waits on each carrier (`apiConfiguration.timeout`, default 15). The server allows 30 seconds for the round trip.
+Live rate calls can take up to about 15 seconds because Priority1 waits on each carrier (`apiConfiguration.timeout`, default 15). The client allows 30 seconds for the round trip.
 
 ## What the desk does
 
 - LTL quote: origin and destination ZIP, pickup date, one or more line items (class, packaging, units, total weight, dimensions, plus stackable, hazmat, used, machinery, NMFC, and description). Accessorials use Priority1's published codes and names. **Suggest class** calls `POST /v2/ltl/quotes/suggestedclass`.
-- Markup slider from 5% to 10%, default 7%. The server rejects anything outside that range, marks up the carrier total, and scales itemized charges by the same factor so they still add up to the customer price (rounded to the cent).
+- Markup slider from 5% to 10%, default 7%. The code rejects anything outside that range, marks up the carrier total, and scales itemized charges by the same factor so they still add up to the customer price (rounded half-up to the cent).
 - Rates table sorted by customer price. **Show internal costs** is off by default and is the only place buy rate, markup dollars, margin, and the carrier quote number appear.
-- Customer PDF for the options you check. It includes the customer, the shipment, sell prices, the quote date and validity, and “Prepared by Dawson Lamb, Director of Supply Chain Solutions and Partnerships, EasyPost”. Priority1 is omitted unless **Mention Priority1 on the customer PDF** is checked. The filename is `EasyPost-Freight-Quote-YYYY-MM-DD.pdf`.
-- Truckload is a second tab (`POST /v2/tl/truckloadquotes/rates`). Those responses have no carrier name or SCAC. If the key is not enabled for truckload, the tab shows that error and LTL keeps working.
+- Customer PDF for the options you check. It includes the EasyPost logo, the customer, the shipment, sell prices, the quote date and validity, and “Prepared by Dawson Lamb, Director of Supply Chain Solutions and Partnerships, EasyPost” on every page. Priority1 is omitted unless **Mention Priority1 on the customer PDF** is checked. The filename is `EasyPost-Freight-Quote-YYYY-MM-DD.pdf`.
+- Truckload is a second tab (`POST /v2/tl/truckloadquotes/rates`). Those responses have no carrier name or SCAC. If the key is not enabled for truckload, the tab says so and LTL keeps working.
 
-## Deploy
+## Deploy on Streamlit Community Cloud
 
-Any Node 22 host that can run a Next.js app is enough. Set the env vars above in the host, not in the image.
+1. Sign in at [share.streamlit.io](https://share.streamlit.io) and choose **Create app**.
+2. Point it at this GitHub repo (`dlamb-boop/Priority1-Rating`) and the branch you want to run (this branch, or `main` after it is merged).
+3. Set **Main file path** to `streamlit_app.py`.
+4. Open **Advanced settings** and set **Python version** to **3.12**. `runtime.txt` also requests `python-3.12`.
+5. Paste secrets into the **Secrets** box (the same keys as `.streamlit/secrets.toml.example`):
 
-```bash
-npm install
-npm run build
-npm start
-```
+   ```toml
+   APP_PASSWORD = "choose-a-password"
+   P1_API_KEY = ""
+   P1_BASE_URL = "https://dev-api.priority1.com"
+   P1_MOCK = "true"
+   ```
 
-A `Dockerfile` is included. It does not copy env files. Pass `P1_API_KEY` and `P1_BASE_URL` at runtime.
-
-This desk has no login. Keep it on an internal network.
+   Leave `P1_API_KEY` blank for demo rates. For live rates, paste the sandbox or production key, set `P1_BASE_URL` to match, and set `P1_MOCK` to `"false"`.
+6. Deploy.
+7. After the app is up, open **Settings → Sharing** and set the app to **private**. Invite only the people who should see it. A public app would expose the internal-cost panel to anyone who has the password.
 
 ## Spec notes
 
