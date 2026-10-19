@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
 import streamlit as st
 
 from freight.accessorials import ACCESSORIALS, code_from_label, option_label
-from freight.config import get_config
+from freight.company_lookup import enrich_candidate, image_to_png, search_companies
+from freight.config import get_config, read_setting
 from freight.constants import EQUIPMENT_LABELS, EQUIPMENT_TYPES, FREIGHT_CLASSES, PACKAGING_TYPES
-from freight.customer import build_customer_quote, to_customer_rate
+from freight.customer import build_customer_quote, format_customer_address, to_customer_rate
 from freight.markup import MARKUP_DEFAULT, MARKUP_MAX, MARKUP_MIN
 from freight.pdf_quote import filename_for, render_customer_pdf
 from freight.quote import public_error, quote_ltl, quote_tl, suggest_class
@@ -130,6 +132,35 @@ def _boot() -> None:
     ss.preparer_title = ""
     ss.preparer_email = ""
     ss.preparer_phone = ""
+    _reset_customer_details(ss)
+    ss.company_candidates = []
+    ss.lookup_message = ""
+    ss.logo_upload_generation = 0
+
+
+def _reset_customer_details(ss) -> None:
+    ss.company_website = ""
+    ss.customer_street = ""
+    ss.customer_suite = ""
+    ss.customer_city = ""
+    ss.customer_state = ""
+    ss.customer_postal = ""
+    ss.customer_country = "US"
+    ss.customer_logo_png = None
+    ss.customer_logo_off = False
+    ss.customer_logo_source = ""
+    ss.customer_address_source = ""
+    ss.customer_website_source = ""
+
+
+def _ensure_customer_keys() -> None:
+    ss = st.session_state
+    if "company_website" not in ss:
+        _reset_customer_details(ss)
+    ss.setdefault("company_candidates", [])
+    ss.setdefault("lookup_message", "")
+    ss.setdefault("logo_upload_generation", 0)
+    ss.setdefault("customer_logo_png", None)
 
 
 def _load_sample() -> None:
@@ -165,6 +196,10 @@ def _load_sample() -> None:
     ss.tl_pallets = 20
     ss.tl_desc = "Packaged hardware"
     ss.tl_equipment = "53_Foot_Dry_Van"
+    _reset_customer_details(ss)
+    ss.company_candidates = []
+    ss.lookup_message = ""
+    ss.logo_upload_generation = int(ss.get("logo_upload_generation") or 0) + 1
 
 
 def _add_item() -> None:
@@ -237,6 +272,182 @@ def _preparer_summary() -> None:
         st.text(line)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_search(name: str, places_key: str) -> list[dict]:
+    return search_companies(name, places_key)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_enrich(payload: str) -> dict:
+    return enrich_candidate(json.loads(payload))
+
+
+def _apply_candidate(candidate: dict) -> None:
+    ss = st.session_state
+    slim = {key: value for key, value in candidate.items() if key != "logo_png"}
+    try:
+        enriched = _cached_enrich(json.dumps(slim, sort_keys=True))
+    except Exception:
+        enriched = {}
+    ss.logo_upload_generation = int(ss.get("logo_upload_generation") or 0) + 1
+    ss.company = enriched.get("name") or ss.get("company") or ""
+    ss.company_website = enriched.get("website") or ""
+    ss.customer_street = enriched.get("street") or ""
+    ss.customer_suite = enriched.get("suite") or ""
+    ss.customer_city = enriched.get("city") or ""
+    ss.customer_state = enriched.get("state") or ""
+    ss.customer_postal = enriched.get("postal") or ""
+    ss.customer_country = enriched.get("country") or "US"
+    ss.customer_logo_png = enriched.get("logo_png")
+    ss.customer_logo_off = False
+    ss.customer_logo_source = enriched.get("logo_source") or ""
+    ss.customer_address_source = enriched.get("address_source") or ""
+    ss.customer_website_source = enriched.get("website_source") or ""
+    bits = []
+    if ss.company_website and ss.customer_website_source:
+        bits.append(f"website from {ss.customer_website_source}")
+    has_address = any((ss.customer_street, ss.customer_city, ss.customer_state, ss.customer_postal))
+    if has_address and ss.customer_address_source:
+        bits.append(f"address from {ss.customer_address_source}")
+    elif not has_address:
+        bits.append("no address was found, so it was left blank")
+    if ss.customer_logo_source:
+        bits.append(f"logo from {ss.customer_logo_source}")
+    else:
+        bits.append("no logo was found")
+    note = "Looked up " + ", ".join(bits) + "."
+    if len(ss.get("company_candidates") or []) > 1:
+        note += " Pick another match if this is the wrong company."
+    ss.lookup_message = note
+
+
+def _clear_lookup() -> None:
+    ss = st.session_state
+    _reset_customer_details(ss)
+    ss.company_candidates = []
+    ss.company_match = ""
+    ss.logo_upload_generation = int(ss.get("logo_upload_generation") or 0) + 1
+    ss.lookup_message = "Nothing was found for that name. The address was left blank."
+
+
+def _lookup_company() -> None:
+    name = (st.session_state.get("company") or "").strip()
+    if len(name) < 2:
+        _clear_lookup()
+        return
+    try:
+        candidates = _cached_search(name, read_setting("GOOGLE_PLACES_API_KEY", ""))
+    except Exception:
+        candidates = []
+    st.session_state.company_candidates = candidates
+    if not candidates:
+        _clear_lookup()
+        return
+    st.session_state.company_match = candidates[0].get("label") or ""
+    _apply_candidate(candidates[0])
+
+
+def _select_match() -> None:
+    label = st.session_state.get("company_match") or ""
+    for candidate in st.session_state.get("company_candidates") or []:
+        if candidate.get("label") == label:
+            _apply_candidate(candidate)
+            return
+
+
+def _uploaded_logo() -> bytes | None:
+    generation = int(st.session_state.get("logo_upload_generation") or 0)
+    uploaded = st.session_state.get(f"customer_logo_file_{generation}")
+    if uploaded is None:
+        st.session_state.logo_upload_error = ""
+        return None
+    try:
+        data = uploaded.getvalue() if hasattr(uploaded, "getvalue") else bytes(uploaded)
+        png = image_to_png(data, source="upload")
+    except Exception:
+        png = None
+    st.session_state.logo_upload_error = "" if png else "That file couldn't be used as a logo."
+    return png
+
+
+def _active_logo() -> bytes | None:
+    if st.session_state.get("customer_logo_off"):
+        return None
+    uploaded = _uploaded_logo()
+    if uploaded:
+        return uploaded
+    logo = st.session_state.get("customer_logo_png")
+    return logo if isinstance(logo, (bytes, bytearray)) else None
+
+
+def _customer_address() -> dict:
+    return {
+        "street": st.session_state.get("customer_street") or "",
+        "suite": st.session_state.get("customer_suite") or "",
+        "city": st.session_state.get("customer_city") or "",
+        "state": st.session_state.get("customer_state") or "",
+        "postal": st.session_state.get("customer_postal") or "",
+        "country": st.session_state.get("customer_country") or "",
+    }
+
+
+def _company_details() -> None:
+    candidates = st.session_state.get("company_candidates") or []
+    if len(candidates) > 1:
+        labels = [candidate.get("label") or "Company" for candidate in candidates]
+        current = st.session_state.get("company_match")
+        if current not in labels:
+            st.session_state.company_match = labels[0]
+        st.selectbox(
+            "Matching companies",
+            labels,
+            key="company_match",
+            on_change=_select_match,
+            help="Name, city, and website. The closest match is already filled in.",
+        )
+    message = (st.session_state.get("lookup_message") or "").strip()
+    if message:
+        if message.startswith("Nothing was found"):
+            st.warning(message)
+        else:
+            st.caption(message)
+    logo = _active_logo()
+    lines = format_customer_address(**_customer_address())
+    website = (st.session_state.get("company_website") or "").strip()
+    if logo or lines or website:
+        preview, text = st.columns([1, 4])
+        if logo:
+            preview.image(logo, width=72)
+        else:
+            preview.caption("No logo")
+        if lines:
+            for line in lines:
+                text.text(line)
+        else:
+            text.caption("No address found.")
+        if website:
+            text.caption(website)
+    with st.expander("Edit details", expanded=False):
+        st.text_input("Website", key="company_website", placeholder="https://example.com")
+        street, suite = st.columns(2)
+        street.text_input("Street", key="customer_street")
+        suite.text_input("Suite", key="customer_suite", placeholder="Optional")
+        city, state, postal, country = st.columns([1.4, 0.6, 0.8, 0.7])
+        city.text_input("City", key="customer_city")
+        state.text_input("State", key="customer_state")
+        postal.text_input("ZIP", key="customer_postal")
+        country.text_input("Country", key="customer_country")
+        st.checkbox("Leave logo off", key="customer_logo_off")
+        generation = int(st.session_state.get("logo_upload_generation") or 0)
+        st.file_uploader(
+            "Replace logo",
+            type=["png", "jpg", "jpeg", "webp", "ico"],
+            key=f"customer_logo_file_{generation}",
+        )
+        if st.session_state.get("logo_upload_error"):
+            st.caption(st.session_state.logo_upload_error)
+
+
 def _lane_fields() -> None:
     left, right = st.columns(2)
     with left:
@@ -246,7 +457,14 @@ def _lane_fields() -> None:
         c2.text_input("Origin city", key="origin_city", placeholder="Little Rock")
         c3.text_input("Origin state", key="origin_state", placeholder="AR", max_chars=2)
     with right:
-        st.text_input("Company", key="company", placeholder="Northwind Goods")
+        name_col, look_col = st.columns([4, 1], vertical_alignment="bottom")
+        name_col.text_input(
+            "Company",
+            key="company",
+            placeholder="Northwind Goods",
+            help="Type the customer company name. Look up fills the website, logo, and address.",
+        )
+        look_col.button("Look up", on_click=_lookup_company, key="lookup_company")
         c1, c2, c3 = st.columns([1.2, 1, 0.6])
         c1.text_input("Destination ZIP", key="dest_zip", placeholder="60606")
         c2.text_input("Destination city", key="dest_city", placeholder="Chicago")
@@ -261,6 +479,7 @@ def _lane_fields() -> None:
         key="markup",
         help="Applied in code, from 5% to 10%. The customer quote shows only the sell price.",
     )
+    _company_details()
 
 
 def _suggest(iid: str) -> None:
@@ -425,10 +644,11 @@ def _rates_panel(quote: dict, product: str) -> None:
                 "preparer_phone": st.session_state.preparer_phone,
                 "show_priority1": st.session_state[partner_key],
                 "shipment": quote["shipment"],
+                "address": _customer_address(),
                 "options": selected,
             }
         )
-        pdf = render_customer_pdf(document)
+        pdf = render_customer_pdf(document, logo_png=_active_logo())
     except Exception as exc:  # noqa: BLE001
         st.error(public_error(exc))
         return
@@ -528,6 +748,7 @@ def _tl_tab() -> None:
 
 def main() -> None:
     _boot()
+    _ensure_customer_keys()
     config = get_config()
     with st.sidebar:
         st.image(str(LOGO), width="stretch")

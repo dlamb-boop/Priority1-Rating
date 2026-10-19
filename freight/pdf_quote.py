@@ -72,14 +72,26 @@ def _transit(days: int | None) -> str:
     return "1 day" if days == 1 else f"{days} days"
 
 
-def render_customer_pdf(document: dict) -> bytes:
+def render_customer_pdf(document: dict, logo_png: bytes | None = None) -> bytes:
     _fonts()
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
-    _draw_document(pdf, document, width, height)
+    _draw_document(pdf, document, width, height, _safe_logo(logo_png))
     pdf.save()
     return _rewrite_metadata(buffer.getvalue(), document)
+
+
+def _safe_logo(logo_png: bytes | None) -> bytes | None:
+    """Re-encode so a fetched image cannot carry its source URL into the PDF."""
+    if not logo_png:
+        return None
+    try:
+        from freight.company_lookup import image_to_png
+
+        return image_to_png(logo_png, source="upload")
+    except Exception:
+        return None
 
 
 def _rewrite_metadata(raw: bytes, document: dict) -> bytes:
@@ -162,7 +174,7 @@ def _footer(pdf: canvas.Canvas, document: dict, width: float) -> None:
         cursor -= 10
 
 
-def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: float) -> None:
+def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: float, logo_png: bytes | None = None) -> None:
     def new_page(continued: bool) -> float:
         if continued:
             pdf.showPage()
@@ -173,21 +185,45 @@ def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: flo
     y = new_page(False)
     prepared = [document.get("customer_name"), document.get("company")]
     prepared = [part for part in prepared if part]
+    address_lines = [line for line in (document.get("address_lines") or []) if isinstance(line, str) and line.strip()]
+    text_x = 40
+    if logo_png:
+        try:
+            pdf.drawImage(
+                ImageReader(BytesIO(logo_png)),
+                40,
+                y - 40,
+                48,
+                48,
+                mask="auto",
+                preserveAspectRatio=True,
+                anchor="c",
+            )
+            text_x = 96
+        except Exception:
+            text_x = 40
     pdf.setFillColor(BLUE)
     pdf.setFont("Poppins-SemiBold", 8)
-    pdf.drawString(40, y, "PREPARED FOR")
+    pdf.drawString(text_x, y, "PREPARED FOR")
     pdf.setFillColor(NAVY)
     pdf.setFont("Poppins-Bold", 13)
     if not prepared:
-        pdf.drawString(40, y - 18, "Prospective customer")
+        pdf.drawString(text_x, y - 18, "Prospective customer")
         y -= 18
     else:
-        pdf.drawString(40, y - 18, prepared[0])
+        pdf.drawString(text_x, y - 18, prepared[0])
         y -= 18
         if len(prepared) > 1:
             pdf.setFont("Poppins", 11)
-            pdf.drawString(40, y - 16, prepared[1])
+            pdf.drawString(text_x, y - 16, prepared[1])
             y -= 16
+    if address_lines:
+        pdf.setFillColor(MUTED)
+        pdf.setFont("Poppins", 9)
+        for line in address_lines:
+            for wrapped in _wrap(line, "Poppins", 9, width - text_x - 40):
+                pdf.drawString(text_x, y - 13, wrapped)
+                y -= 13
 
     y = _section(pdf, "Shipment", y)
     box_top = y

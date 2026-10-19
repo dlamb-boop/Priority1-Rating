@@ -215,3 +215,59 @@ def test_pdf_section_and_card_spacing():
     assert company - shipment >= 24
     assert accessorials - options >= 24
     assert discount - transit >= 14
+
+
+def test_pdf_prints_address_and_hides_logo_source():
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = Image.new("RGBA", (80, 80), (10, 40, 180, 255))
+    for x in range(40):
+        for y in range(80):
+            image.putpixel((x, y), (220, 40, 40, 255))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    # A text chunk would be a way for a source URL to ride along. Re-encoding must drop it.
+    dirty = Image.new("RGBA", (80, 80), (10, 40, 180, 255))
+    for x in range(40):
+        for y in range(80):
+            dirty.putpixel((x, y), (220, 40, 40, 255))
+    dirty_buffer = BytesIO()
+    dirty.save(dirty_buffer, format="PNG")
+    dirty_png = dirty_buffer.getvalue() + b"\nhttps://www.google.com/s2/favicons?domain=example.com https://commons.wikimedia.org/wiki/File:Logo.svg https://icons.duckduckgo.com/ip3/example.com.ico"
+    document = build_customer_quote(
+        {
+            "customer_name": "Alex Chen",
+            "company": "Northwind",
+            "quote_date": "2026-10-19",
+            "shipment": SHIPMENT,
+            "address": {
+                "street": "100 Main Street",
+                "city": "Bentonville",
+                "state": "AR",
+                "postal": "72712",
+                "country": "US",
+            },
+            "options": [
+                {
+                    "carrier_name": "Southeastern Freight",
+                    "scac": "SEFL",
+                    "service_level_description": "Standard",
+                    "transit_days": 2,
+                    "customer_total": 100,
+                    "charges": [],
+                }
+            ],
+        }
+    )
+    data = render_customer_pdf(document, logo_png=dirty_png)
+    extracted = pdf_text(data)
+    assert "100 Main Street" in extracted["text"]
+    assert "Bentonville, AR 72712" in extracted["text"]
+    assert "United States" not in extracted["text"]
+    lowered = data.lower()
+    metadata = " ".join(extracted["info"].values()).lower()
+    for token in (b"http", b"wikidata", b"google.com/s2", b"duckduckgo", b"commons.wikimedia"):
+        assert token not in lowered
+        assert token.decode() not in metadata

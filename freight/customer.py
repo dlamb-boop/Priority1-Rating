@@ -63,6 +63,38 @@ def _reference(quote_date: str, origin: str, destination: str) -> str:
     return f"EPQ-{digest:X}"[:10]
 
 
+def format_customer_address(
+    street: str = "",
+    suite: str = "",
+    city: str = "",
+    state: str = "",
+    postal: str = "",
+    country: str = "",
+) -> list[str]:
+    """Lines for the customer PDF. Empty parts are omitted, and a lone US country is not printed."""
+    street = _clean(street, 120)
+    suite = _clean(suite, 40)
+    city = _clean(city, 60)
+    state = _clean(state, 40)
+    postal = _clean(postal, 16)
+    country = _clean(country, 60)
+    if len(state) == 2:
+        state = state.upper()
+    lines: list[str] = []
+    street_line = ", ".join(part for part in (street, suite) if part)
+    if street_line:
+        lines.append(street_line)
+    locality = ", ".join(part for part in (city, state) if part)
+    if postal:
+        locality = f"{locality} {postal}".strip()
+    if locality:
+        lines.append(locality)
+    country_key = country.lower().rstrip(".")
+    if country and country_key not in {"us", "usa", "united states", "united states of america"}:
+        lines.append(country)
+    return lines
+
+
 def customer_pdf_filename(quote_date: str) -> str:
     match = re.match(r"(\d{4}-\d{2}-\d{2})", quote_date or "")
     stamp = match.group(1) if match else "quote"
@@ -150,9 +182,19 @@ def build_customer_quote(payload: dict) -> dict:
     preparer_title = _clean(payload.get("preparer_title"), 80)
     preparer_email = _clean(payload.get("preparer_email"), 80)
     preparer_phone = _clean(payload.get("preparer_phone"), 40)
+    address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
+    address_lines = format_customer_address(
+        str(address.get("street") or ""),
+        str(address.get("suite") or ""),
+        str(address.get("city") or ""),
+        str(address.get("state") or ""),
+        str(address.get("postal") or ""),
+        str(address.get("country") or ""),
+    )
     return {
         "customer_name": _clean(payload.get("customer_name"), 80),
         "company": _clean(payload.get("company"), 80),
+        "address_lines": address_lines,
         "preparer_name": preparer_name,
         "prepared_by": prepared_by_line(preparer_name, preparer_title, preparer_email, preparer_phone),
         "quote_date": quote_date,
