@@ -9,11 +9,11 @@ from pathlib import Path
 import streamlit as st
 
 from freight.accessorials import ACCESSORIALS, code_from_label, option_label
-from freight.company_lookup import enrich_candidate, image_to_png, search_companies
+from freight.company_lookup import enrich_candidate, image_to_png, lookup_by_website, merge_website_lookup, search_companies
 from freight.config import get_config, read_setting
 from freight.constants import EQUIPMENT_LABELS, EQUIPMENT_TYPES, FREIGHT_CLASSES, PACKAGING_TYPES
 from freight.customer import build_customer_quote, format_customer_address, to_customer_rate
-from freight.preparers import load_preparers, preparer_id, read_preparer_secrets
+from freight.preparers import load_preparers, preparer_id
 from freight.markup import MARKUP_DEFAULT, MARKUP_MAX, MARKUP_MIN
 from freight.pdf_quote import filename_for, render_customer_pdf
 from freight.quote import public_error, quote_ltl, quote_tl, suggest_class
@@ -133,7 +133,7 @@ def _boot() -> None:
     ss.preparer_name = ""
     ss.preparer_title = ""
     ss.preparer_email = ""
-    ss.preparer_phone = ""
+    ss.company_name_from_lookup = False
     _reset_customer_details(ss)
     ss.company_candidates = []
     ss.lookup_message = ""
@@ -153,6 +153,7 @@ def _reset_customer_details(ss) -> None:
     ss.customer_logo_source = ""
     ss.customer_address_source = ""
     ss.customer_website_source = ""
+    ss.customer_hand_edited = set()
 
 
 def _ensure_customer_keys() -> None:
@@ -163,6 +164,8 @@ def _ensure_customer_keys() -> None:
     ss.setdefault("lookup_message", "")
     ss.setdefault("logo_upload_generation", 0)
     ss.setdefault("customer_logo_png", None)
+    ss.setdefault("company_name_from_lookup", False)
+    ss.setdefault("customer_hand_edited", set())
 
 
 def _load_sample() -> None:
@@ -199,6 +202,7 @@ def _load_sample() -> None:
     ss.tl_desc = "Packaged hardware"
     ss.tl_equipment = "53_Foot_Dry_Van"
     _reset_customer_details(ss)
+    ss.company_name_from_lookup = False
     ss.company_candidates = []
     ss.lookup_message = ""
     ss.logo_upload_generation = int(ss.get("logo_upload_generation") or 0) + 1
@@ -252,7 +256,7 @@ def _read_items() -> list[dict]:
 
 
 def _roster() -> list[dict]:
-    roster, _source = load_preparers(read_preparer_secrets(), ROOT / "preparers.json")
+    roster = load_preparers(ROOT / "data" / "preparers.json")
     st.session_state._preparer_roster = roster
     return roster
 
@@ -265,12 +269,10 @@ def _select_preparer() -> None:
         st.session_state.preparer_name = ""
         st.session_state.preparer_title = ""
         st.session_state.preparer_email = ""
-        st.session_state.preparer_phone = ""
         return
     st.session_state.preparer_name = match["name"]
     st.session_state.preparer_title = match["title"]
     st.session_state.preparer_email = match["email"]
-    st.session_state.preparer_phone = match["phone"]
 
 
 def _preparer_label(rep: dict, roster: list[dict]) -> str:
@@ -283,11 +285,10 @@ def _preparer_fields() -> None:
     st.markdown("Prepare a custom customer LTL/FTL quote")
     roster = _roster()
     if not roster:
-        st.warning("No sales roster found. Enter your details, or add preparers to secrets or preparers.json.")
+        st.warning("No sales roster found. Enter your name, title, and email.")
         st.text_input("Your name", key="preparer_name", placeholder="Casey Ng", live=True)
         st.text_input("Title", key="preparer_title", placeholder="Account Executive", live=True)
         st.text_input("Email", key="preparer_email", placeholder="casey.ng@example.com", live=True)
-        st.text_input("Phone", key="preparer_phone", placeholder="Optional", live=True)
         return
     if "preparer_choice" not in st.session_state:
         st.session_state.preparer_choice = ""
@@ -300,21 +301,21 @@ def _preparer_fields() -> None:
         key="preparer_choice",
         on_change=_select_preparer,
         filter_mode="fuzzy",
-        help="Pick your name. Title, email, and phone fill in for this quote.",
+        help="Pick your name. Title and email fill in for this quote.",
     )
     email = (st.session_state.get("preparer_email") or "").strip()
     if email:
         st.caption(email)
     with st.expander("Edit details"):
         st.text_input("Title", key="preparer_title", live=True)
-        st.text_input("Phone", key="preparer_phone", placeholder="Optional", live=True)
+        st.text_input("Email", key="preparer_email", live=True)
 
 
 def _preparer_summary() -> None:
     """Read-only echo of the sidebar fields. Same session keys, no second inputs."""
     lines = [
         (st.session_state.get(key) or "").strip()
-        for key in ("preparer_name", "preparer_title", "preparer_email", "preparer_phone")
+        for key in ("preparer_name", "preparer_title", "preparer_email")
     ]
     filled = [line for line in lines if line]
     if not filled:
@@ -333,6 +334,11 @@ def _cached_search(name: str, places_key: str) -> list[dict]:
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_enrich(payload: str) -> dict:
     return enrich_candidate(json.loads(payload))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_website(website: str, places_key: str) -> dict:
+    return lookup_by_website(website, places_key)
 
 
 def _apply_candidate(candidate: dict) -> None:
@@ -383,7 +389,87 @@ def _clear_lookup() -> None:
     ss.lookup_message = "Nothing was found for that name. The address was left blank."
 
 
+_DETAIL_LOCKS = {
+    "customer_street": "street",
+    "customer_suite": "suite",
+    "customer_city": "city",
+    "customer_state": "state",
+    "customer_postal": "postal",
+    "customer_country": "country",
+}
+
+
+def _remember_edit(field: str) -> None:
+    locked_name = _DETAIL_LOCKS.get(field, field)
+    locked = set(st.session_state.get("customer_hand_edited") or [])
+    value = st.session_state.get(field) or ""
+    if isinstance(value, str) and value.strip():
+        locked.add(locked_name)
+    else:
+        locked.discard(locked_name)
+    st.session_state.customer_hand_edited = locked
+
+
+def _on_company_typed() -> None:
+    st.session_state.company_name_from_lookup = False
+
+
+def _on_website_typed() -> None:
+    website = (st.session_state.get("company_website") or "").strip()
+    if website:
+        _lookup_from_website()
+
+
+def _lookup_from_website() -> None:
+    ss = st.session_state
+    website = (ss.get("company_website") or "").strip()
+    if not website:
+        return
+    try:
+        found = _cached_website(website, read_setting("GOOGLE_PLACES_API_KEY", ""))
+    except Exception:
+        found = {"found": False}
+    if not isinstance(found, dict):
+        found = {"found": False}
+    current = {
+        "name": ss.get("company") or "",
+        "street": ss.get("customer_street") or "",
+        "suite": ss.get("customer_suite") or "",
+        "city": ss.get("customer_city") or "",
+        "state": ss.get("customer_state") or "",
+        "postal": ss.get("customer_postal") or "",
+        "country": ss.get("customer_country") or "US",
+        "logo_png": ss.get("customer_logo_png"),
+        "logo_source": ss.get("customer_logo_source") or "",
+        "address_source": ss.get("customer_address_source") or "",
+    }
+    merged = merge_website_lookup(
+        current,
+        found,
+        ss.get("customer_hand_edited") or (),
+        name_from_lookup=bool(ss.get("company_name_from_lookup")),
+    )
+    ss.company = merged["name"]
+    ss.company_name_from_lookup = merged["name_from_lookup"]
+    ss.customer_street = merged["street"]
+    ss.customer_suite = merged["suite"]
+    ss.customer_city = merged["city"]
+    ss.customer_state = merged["state"]
+    ss.customer_postal = merged["postal"]
+    ss.customer_country = merged["country"] or "US"
+    ss.customer_logo_png = merged["logo_png"]
+    ss.customer_logo_source = merged["logo_source"]
+    ss.customer_address_source = merged["address_source"]
+    if found.get("found"):
+        ss.company_candidates = []
+        ss.lookup_message = "Found from website."
+    else:
+        ss.lookup_message = "Nothing was found for that website. The address was left blank."
+
+
 def _lookup_company() -> None:
+    st.session_state.customer_hand_edited = set()
+    st.session_state.company_name_from_lookup = True
     name = (st.session_state.get("company") or "").strip()
     if len(name) < 2:
         _clear_lookup()
@@ -481,15 +567,21 @@ def _company_details() -> None:
         if website:
             text.caption(website)
     with st.expander("Edit details", expanded=False):
-        st.text_input("Website", key="company_website", placeholder="https://example.com")
+        st.text_input(
+            "Website",
+            key="company_website",
+            placeholder="https://example.com",
+            on_change=_on_website_typed,
+            help="Type a website if the name lookup missed. Logo, address, and company name fill in from that site.",
+        )
         street, suite = st.columns(2)
-        street.text_input("Street", key="customer_street")
-        suite.text_input("Suite", key="customer_suite", placeholder="Optional")
+        street.text_input("Street", key="customer_street", on_change=_remember_edit, args=("customer_street",))
+        suite.text_input("Suite", key="customer_suite", placeholder="Optional", on_change=_remember_edit, args=("customer_suite",))
         city, state, postal, country = st.columns([1.4, 0.6, 0.8, 0.7])
-        city.text_input("City", key="customer_city")
-        state.text_input("State", key="customer_state")
-        postal.text_input("ZIP", key="customer_postal")
-        country.text_input("Country", key="customer_country")
+        city.text_input("City", key="customer_city", on_change=_remember_edit, args=("customer_city",))
+        state.text_input("State", key="customer_state", on_change=_remember_edit, args=("customer_state",))
+        postal.text_input("ZIP", key="customer_postal", on_change=_remember_edit, args=("customer_postal",))
+        country.text_input("Country", key="customer_country", on_change=_remember_edit, args=("customer_country",))
         st.checkbox("Leave logo off", key="customer_logo_off")
         generation = int(st.session_state.get("logo_upload_generation") or 0)
         st.file_uploader(
@@ -515,7 +607,8 @@ def _lane_fields() -> None:
             "Company",
             key="company",
             placeholder="Northwind Goods",
-            help="Type the customer company name. Look up fills the website, logo, and address.",
+            on_change=_on_company_typed,
+            help="Type the customer company name and press Look up. A website under Edit details looks the company up again.",
         )
         look_col.button("Look up", on_click=_lookup_company, key="lookup_company")
         c1, c2, c3 = st.columns([1.2, 1, 0.6])
@@ -694,7 +787,6 @@ def _rates_panel(quote: dict, product: str) -> None:
                 "preparer_name": st.session_state.preparer_name,
                 "preparer_title": st.session_state.preparer_title,
                 "preparer_email": st.session_state.preparer_email,
-                "preparer_phone": st.session_state.preparer_phone,
                 "show_priority1": st.session_state[partner_key],
                 "shipment": quote["shipment"],
                 "address": _customer_address(),

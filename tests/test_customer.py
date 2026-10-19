@@ -91,10 +91,10 @@ def test_prepared_by_line_uses_what_was_entered():
     assert prepared_by_line("Priya Shah") == "Prepared by Priya Shah, EasyPost"
     assert prepared_by_line("Priya Shah", "Logistics Manager") == "Prepared by Priya Shah, Logistics Manager, EasyPost"
     assert (
-        prepared_by_line("Priya Shah", "Logistics Manager", "priya@easypost.com", "(501) 555-0148")
-        == "Prepared by Priya Shah, Logistics Manager, EasyPost · priya@easypost.com · (501) 555-0148"
+        prepared_by_line("Priya Shah", "Logistics Manager", "priya@easypost.com")
+        == "Prepared by Priya Shah, Logistics Manager, EasyPost · priya@easypost.com"
     )
-    assert prepared_by_line("", "", "", "(501) 555-0148") == "Prepared by EasyPost · (501) 555-0148"
+    assert prepared_by_line("", "", "") == "Prepared by EasyPost"
     document = build_customer_quote(
         {
             "company": "Northwind Goods",

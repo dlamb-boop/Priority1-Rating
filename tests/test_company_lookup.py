@@ -15,6 +15,8 @@ from freight.company_lookup import (
     enrich_candidate,
     http_get,
     image_to_png,
+    lookup_by_website,
+    merge_website_lookup,
     normalize_domain,
     search_companies,
 )
@@ -395,3 +397,234 @@ def test_address_formatting_omits_blank_and_default_country():
     assert document["address_lines"] == ["100 Main Street", "Bentonville, AR 72712"]
     assert "cdn.example" not in serialized
     assert "http" not in serialized
+
+
+def _website_router(pages: dict, *, places: dict | None = None, sparql_ids: list[str] | None = None, entities: dict | None = None):
+    """Mock http_request for a website lookup. pages maps a URL suffix to (body, content_type)."""
+
+    def fake(method, url, **kwargs):
+        assert SECRET not in url
+        if method == "POST" and "places.googleapis.com" in url:
+            assert kwargs["headers"]["X-Goog-Api-Key"] == SECRET
+            return 200, json.dumps(places or {"places": []}).encode(), "application/json"
+        if "query.wikidata.org" in url:
+            assert "P856" in url
+            bindings = []
+            for qid in sparql_ids or []:
+                bindings.append({"item": {"value": f"http://www.wikidata.org/entity/{qid}"}})
+            return 200, json.dumps({"results": {"bindings": bindings}}).encode(), "application/json"
+        if "wbgetentities" in url:
+            from urllib.parse import parse_qs, urlparse
+
+            ids = parse_qs(urlparse(url).query).get("ids", [""])[0].split("|")
+            found = {qid: (entities or {})[qid] for qid in ids if qid in (entities or {})}
+            return 200, json.dumps({"entities": found}).encode(), "application/json"
+        for suffix, payload in pages.items():
+            if url.rstrip("/").endswith(suffix.rstrip("/")) or url.endswith(suffix):
+                body, content_type = payload
+                return 200, body, content_type
+        return 0, b"", ""
+
+    return fake
+
+
+def test_website_lookup_reads_jsonld_name_address_and_logo(monkeypatch):
+    html = """
+    <html><head>
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <script type="application/ld+json">
+    {"@type":"Organization","name":"Northwind","legalName":"Northwind Goods LLC","address":{"@type":"PostalAddress","streetAddress":"100 Main Street","addressLocality":"Bentonville","addressRegion":"Arkansas","postalCode":"72712","addressCountry":"United States"}}
+    </script>
+    </head></html>
+    """
+    icon = _png(180, 180)
+    pages = {
+        "northwind.example": (html.encode(), "text/html"),
+        "/apple-touch-icon.png": (icon, "image/png"),
+    }
+    monkeypatch.setattr("freight.company_lookup.http_request", _website_router(pages))
+    found = lookup_by_website("https://www.Northwind.example/home")
+    assert found["found"] is True
+    assert found["name"] == "Northwind Goods LLC"
+    assert found["domain"] == "northwind.example"
+    assert found["street"] == "100 Main Street"
+    assert found["city"] == "Bentonville"
+    assert found["state"] == "AR"
+    assert found["postal"] == "72712"
+    assert found["country"] == "US"
+    assert found["address_source"] == SOURCE_SITE
+    assert found["logo_source"] == SOURCE_APPLE
+    assert found["logo_png"]
+    public = {key: value for key, value in found.items() if key != "logo_png"}
+    dumped = json.dumps(public)
+    assert "/apple-touch-icon.png" not in dumped
+    assert "wikidata.org" not in dumped
+
+
+def test_website_lookup_reads_about_page_and_wikidata_p856(monkeypatch):
+    about = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Organization","legalName":"Northwind Goods LLC","address":{"@type":"PostalAddress","streetAddress":"100 Main Street","addressLocality":"Bentonville","addressRegion":"AR","postalCode":"72712","addressCountry":"US"}}
+    </script>
+    </head></html>
+    """
+    entities = {
+        "Q1": _entity("Not Northwind", {"P856": [_claim("https://notnorthwind.example")]}, "other site"),
+        "Q2": _entity(
+            "Northwind",
+            {
+                "P856": [_claim("https://www.northwind.example/")],
+                "P159": [_claim({"entity-type": "item", "id": "Q100"})],
+                "P154": [_claim("Northwind logo.png")],
+            },
+            "retailer",
+        ),
+        "Q100": _entity("Bentonville", {"P131": [_claim({"entity-type": "item", "id": "Q300"})], "P281": [_claim("72716")]}),
+        "Q300": _entity("Arkansas", {}),
+    }
+    pages = {"/about": (about.encode(), "text/html")}
+    monkeypatch.setattr(
+        "freight.company_lookup.http_request",
+        _website_router(pages, sparql_ids=["Q1", "Q2"], entities=entities),
+    )
+    found = lookup_by_website("northwind.example")
+    assert found["name"] == "Northwind Goods LLC"
+    assert found["street"] == "100 Main Street"
+    assert found["city"] == "Bentonville"
+    assert found["state"] == "AR"
+    assert "Q1" not in json.dumps({key: value for key, value in found.items() if key != "logo_png"})
+
+
+def test_website_lookup_uses_wikidata_name_when_the_page_name_is_the_domain(monkeypatch):
+    html = """
+    <html><head>
+    <script type="application/ld+json">{"@type":"Organization","name":"northwind.example"}</script>
+    </head></html>
+    """
+    entities = {
+        "Q2": _entity("Northwind Goods", {"P856": [_claim("https://northwind.example")]}, "retailer"),
+    }
+    pages = {"northwind.example": (html.encode(), "text/html")}
+    monkeypatch.setattr(
+        "freight.company_lookup.http_request",
+        _website_router(pages, sparql_ids=["Q2"], entities=entities),
+    )
+    found = lookup_by_website("northwind.example")
+    assert found["name"] == "Northwind Goods"
+    assert found["name"] != "northwind.example"
+
+
+def test_website_lookup_places_must_match_the_domain_and_key_stays_out(monkeypatch):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Organization","legalName":"Northwind Goods LLC","address":{"@type":"PostalAddress","streetAddress":"1 Old Road","addressLocality":"Springdale","addressRegion":"AR","postalCode":"72764","addressCountry":"US"}}
+    </script>
+    </head></html>
+    """
+    places = {
+        "places": [
+            {
+                "id": "other",
+                "displayName": {"text": "Some Other Store"},
+                "websiteUri": "https://other.example",
+                "addressComponents": [
+                    {"longText": "9 Side Street", "shortText": "9 Side St", "types": ["route"]},
+                    {"longText": "Rogers", "shortText": "Rogers", "types": ["locality"]},
+                ],
+            },
+            {
+                "id": "match",
+                "displayName": {"text": "northwind.example"},
+                "websiteUri": "https://www.northwind.example",
+                "addressComponents": [
+                    {"longText": "100", "shortText": "100", "types": ["street_number"]},
+                    {"longText": "Main Street", "shortText": "Main St", "types": ["route"]},
+                    {"longText": "Bentonville", "shortText": "Bentonville", "types": ["locality"]},
+                    {"longText": "Arkansas", "shortText": "AR", "types": ["administrative_area_level_1"]},
+                    {"longText": "72712", "shortText": "72712", "types": ["postal_code"]},
+                    {"longText": "United States", "shortText": "US", "types": ["country"]},
+                ],
+            },
+        ]
+    }
+    pages = {"northwind.example": (html.encode(), "text/html")}
+    monkeypatch.setattr(
+        "freight.company_lookup.http_request",
+        _website_router(pages, places=places),
+    )
+    found = lookup_by_website("northwind.example", places_api_key=SECRET)
+    assert found["name"] == "Northwind Goods LLC"
+    assert found["street"] == "100 Main Street"
+    assert found["city"] == "Bentonville"
+    assert found["state"] == "AR"
+    assert found["postal"] == "72712"
+    assert found["address_source"] == SOURCE_PLACES
+    assert SECRET not in json.dumps({key: value for key, value in found.items() if key != "logo_png"})
+    assert "other.example" not in json.dumps({key: value for key, value in found.items() if key != "logo_png"})
+
+
+def test_website_lookup_empty_result_does_not_raise(monkeypatch):
+    def boom(method, url, **kwargs):
+        raise requests.Timeout("timed out")
+
+    monkeypatch.setattr("freight.company_lookup.http_request", boom)
+    found = lookup_by_website("https://northwind.example")
+    assert found["found"] is False
+    assert found["name"] == ""
+    assert found["street"] == ""
+    assert lookup_by_website("not a company name")["found"] is False
+    assert lookup_by_website("https://en.wikipedia.org/wiki/Walmart")["found"] is False
+
+
+def test_merge_website_lookup_keeps_hand_typed_fields():
+    current = {
+        "name": "Typed Name",
+        "street": "1 Hand Street",
+        "suite": "",
+        "city": "",
+        "state": "",
+        "postal": "",
+        "country": "US",
+        "logo_png": b"old",
+        "logo_source": "Wikidata",
+        "address_source": "Wikidata",
+    }
+    found = {
+        "found": True,
+        "name": "Northwind Goods LLC",
+        "street": "100 Main Street",
+        "suite": "Suite 5",
+        "city": "Bentonville",
+        "state": "AR",
+        "postal": "72712",
+        "country": "US",
+        "logo_png": b"new",
+        "logo_source": SOURCE_APPLE,
+        "address_source": SOURCE_SITE,
+    }
+    kept = merge_website_lookup(current, found, {"street"}, name_from_lookup=False)
+    assert kept["name"] == "Typed Name"
+    assert kept["street"] == "1 Hand Street"
+    assert kept["city"] == "Bentonville"
+    assert kept["suite"] == "Suite 5"
+    assert kept["logo_png"] == b"new"
+    assert kept["name_from_lookup"] is False
+
+    replaced = merge_website_lookup(current, found, {"street"}, name_from_lookup=True)
+    assert replaced["name"] == "Northwind Goods LLC"
+    assert replaced["street"] == "1 Hand Street"
+    assert replaced["name_from_lookup"] is True
+
+    empty_name = dict(current, name="")
+    filled = merge_website_lookup(empty_name, found, (), name_from_lookup=False)
+    assert filled["name"] == "Northwind Goods LLC"
+    assert filled["street"] == "100 Main Street"
+
+    missed = merge_website_lookup(current, {"found": False}, {"street"}, name_from_lookup=True)
+    assert missed["name"] == "Typed Name"
+    assert missed["street"] == "1 Hand Street"
+    assert missed["city"] == ""
+    assert missed["logo_png"] is None
+    assert missed["country"] == "US"

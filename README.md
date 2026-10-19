@@ -56,22 +56,12 @@ Streamlit secrets win. If a key is absent there, the same name is read from the 
 | `P1_BASE_URL` | `https://dev-api.priority1.com` (sandbox, the default) or `https://api.priority1.com` (production). |
 | `P1_MOCK` | `true` forces demo rates even when a key is present. |
 | `GOOGLE_PLACES_API_KEY` | Optional. When set, company lookup uses Google Places for the headquarters address and website. Leave blank to use Wikidata and the company website only. The key is never shown. |
-| `[[preparers]]` | Sales roster for the prepared-by dropdown. Each table has `name`, `title`, `email`, and `phone` (phone may be `""`). Put the real roster in secrets only. |
 
-Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Do not commit `secrets.toml` or a real `preparers.json`.
+Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Do not commit `secrets.toml`.
 
 ### Sales roster
 
-The sidebar dropdown is the sales roster. Secrets are the source when `[[preparers]]` is set. Otherwise the app reads a gitignored `preparers.json` in the repo root:
-
-```json
-[
-  {"name": "Casey Ng", "title": "Account Executive", "email": "casey.ng@example.com", "phone": ""},
-  {"name": "Riley Chen", "title": "Senior Account Executive", "email": "riley.chen@example.com", "phone": "(501) 555-0199"}
-]
-```
-
-Names are sorted A to Z. Choosing a name fills title, email, and phone. Title and phone can be changed for that quote under **Edit details**. A blank phone is left off the main page and the PDF. If neither secrets nor `preparers.json` is present, the sidebar asks for the details by hand.
+The sidebar dropdown loads `data/preparers.json`. Each entry has `name`, `title`, and `email`. Names are sorted A to Z. Choosing a name fills title and email. Title and email can be changed for that quote under **Edit details**. If the file is missing or empty, the sidebar asks for name, title, and email by hand.
 
 ### Sandbox and production
 
@@ -107,8 +97,9 @@ Live rate calls can take up to about 15 seconds because Priority1 waits on each 
 - Markup slider from 5% to 10%, default 7%. The code rejects anything outside that range, marks up the carrier total, and scales itemized charges by the same factor so they still add up to the customer price (rounded half-up to the cent).
 - Rates table sorted by customer price. **Show internal costs** is off by default and is the only place buy rate, markup dollars, margin, and the carrier quote number appear.
 - Customer company: type the company name and press **Look up**. The desk fills the website, logo, and address. If several companies match, pick one from the list (name, city, and domain). The filled fields stay visible and can be corrected under **Edit details**. If nothing is found, the address is left blank. A domain is never invented from the name.
-- Lookup order, with short timeouts: Wikidata (official website, logo, and headquarters), then the company homepage and, if needed, `/contact` or `/about` for a schema.org address and logo, then the site icon and a favicon service. When `GOOGLE_PLACES_API_KEY` is set, Google Places is the first source for the address and website.
-- Prepared by: choose a sales rep from the sidebar dropdown. Title, email, and phone fill in from the roster and show on the main page. Title and phone can be edited for that quote. A blank phone is omitted. The PDF line always ends with EasyPost.
+- If the name lookup misses, type the customer website under **Edit details**. That runs the lookup again for that domain and shows **Found from website**. It fills the logo, the address, and the company name when the name is empty or still the one from the name lookup. Fields typed by hand are left as entered.
+- Lookup order, with short timeouts: Wikidata (official website, logo, and headquarters), then the company homepage and, if needed, `/contact` or `/about` for a schema.org address, organization name, and logo, then the site icon and a favicon service. A typed website also searches Wikidata by official website (P856). When `GOOGLE_PLACES_API_KEY` is set, Google Places is the first source for a name lookup and is used for a website lookup when the place's website matches that domain.
+- Prepared by: choose a sales rep from the sidebar dropdown. Title and email fill in from `data/preparers.json` and show on the main page. Title and email can be edited for that quote. The PDF line always ends with EasyPost.
 - Customer PDF for the options you check. It includes the EasyPost logo, the customer, the looked-up company address, the customer logo when one was found, the shipment, sell prices, the quote date and validity, and a prepared-by line on every page. The website URL is not printed. Priority1 is omitted unless **Mention Priority1 on the customer PDF** is checked. The filename is `EasyPost-Freight-Quote-YYYY-MM-DD.pdf`.
 - Truckload is a second tab (`POST /v2/tl/truckloadquotes/rates`). Those responses have no carrier name or SCAC. If the key is not enabled for truckload, the tab says so and LTL keeps working.
 
@@ -126,7 +117,7 @@ Live rate calls can take up to about 15 seconds because Priority1 waits on each 
    P1_MOCK = "true"
    ```
 
-   Leave `P1_API_KEY` blank for demo rates. For live rates, paste the sandbox or production key, set `P1_BASE_URL` to match, and set `P1_MOCK` to `"false"`. The key stays in this secrets box and is never shown in the UI. Paste the real `[[preparers]]` roster into this same secrets box. Do not commit it.
+   Leave `P1_API_KEY` blank for demo rates. For live rates, paste the sandbox or production key, set `P1_BASE_URL` to match, and set `P1_MOCK` to `"false"`. The key stays in this secrets box and is never shown in the UI. The sales roster ships in `data/preparers.json`.
 6. Deploy. Sharing can be left public.
 
 ## Spec notes

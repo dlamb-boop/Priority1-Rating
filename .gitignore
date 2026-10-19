@@ -15,7 +15,6 @@ test-results
 samples
 
 .streamlit/secrets.toml
-preparers.json
 __pycache__/
 *.py[cod]
 .pytest_cache/

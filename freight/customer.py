@@ -181,7 +181,6 @@ def build_customer_quote(payload: dict) -> dict:
     preparer_name = _clean(payload.get("preparer_name"), 80)
     preparer_title = _clean(payload.get("preparer_title"), 80)
     preparer_email = _clean(payload.get("preparer_email"), 80)
-    preparer_phone = _clean(payload.get("preparer_phone"), 40)
     address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
     address_lines = format_customer_address(
         str(address.get("street") or ""),
@@ -196,7 +195,7 @@ def build_customer_quote(payload: dict) -> dict:
         "company": _clean(payload.get("company"), 80),
         "address_lines": address_lines,
         "preparer_name": preparer_name,
-        "prepared_by": prepared_by_line(preparer_name, preparer_title, preparer_email, preparer_phone),
+        "prepared_by": prepared_by_line(preparer_name, preparer_title, preparer_email),
         "quote_date": quote_date,
         "valid_through": expirations[0] if expirations else _add_days(quote_date, 7),
         "reference": _reference(quote_date, origin_zip, destination_zip),
@@ -246,11 +245,11 @@ def assert_customer_safe(document: dict, raw_base_amounts: list[str] | None = No
             raise AssertionError("Customer quote includes a pre-markup amount.")
 
 
-def prepared_by_line(name: str = "", title: str = "", email: str = "", phone: str = "") -> str:
-    """Customer footer. EasyPost is always the company; blank contact parts are left out."""
+def prepared_by_line(name: str = "", title: str = "", email: str = "") -> str:
+    """Customer footer. EasyPost is always the company; a blank email is left out."""
     who = ", ".join(part for part in (_clean(name, 80), _clean(title, 80), "EasyPost") if part)
-    contact = " · ".join(part for part in (_clean(email, 80), _clean(phone, 40)) if part)
+    email_text = _clean(email, 80)
     line = f"Prepared by {who}"
-    if contact:
-        line = f"{line} · {contact}"
+    if email_text:
+        line = f"{line} · {email_text}"
     return line

@@ -1,67 +1,97 @@
 import json
+from io import BytesIO
 
-from freight.customer import prepared_by_line
+from pypdf import PdfReader
+
+from freight.customer import build_customer_quote, prepared_by_line
+from freight.pdf_quote import render_customer_pdf
 from freight.preparers import load_preparers
 
-CASEY = {
-    "name": "Casey Ng",
-    "title": "Account Executive",
-    "email": "casey.ng@example.com",
-    "phone": "",
+DAWSON_TITLE = "Director of Supply Chain Solutions and Partnerships"
+
+SHIPMENT = {
+    "origin_zip_code": "72205",
+    "origin_city": "Little Rock",
+    "origin_state": "AR",
+    "destination_zip_code": "60606",
+    "destination_city": "Chicago",
+    "destination_state": "IL",
+    "pickup_date": "2026-10-20",
+    "items": [
+        {
+            "freight_class": "70",
+            "packaging_type": "Pallet",
+            "units": 1,
+            "total_weight": 500,
+            "length": 48,
+            "width": 40,
+            "height": 48,
+        }
+    ],
+    "accessorials": [],
 }
-RILEY = {
-    "name": "Riley Chen",
-    "title": "Senior Account Executive",
-    "email": "riley.chen@example.com",
-    "phone": "(501) 555-0199",
-}
 
 
-def test_roster_is_sorted_by_name(tmp_path):
-    roster, source = load_preparers([RILEY, CASEY, {"name": "  ", "title": "Skip"}], tmp_path / "absent.json")
-    assert source == "secrets"
-    assert [rep["name"] for rep in roster] == ["Casey Ng", "Riley Chen"]
-    assert roster[0]["phone"] == ""
-    assert roster[1]["phone"] == "(501) 555-0199"
+def test_committed_roster_is_sorted_and_has_no_phone():
+    roster = load_preparers()
+    assert len(roster) == 19
+    names = [rep["name"] for rep in roster]
+    assert names == sorted(names, key=str.casefold)
+    assert all(set(rep) == {"name", "title", "email"} for rep in roster)
+    assert all(rep["email"].endswith("@easypost.com") for rep in roster)
+    dawson = next(rep for rep in roster if rep["name"] == "Dawson Lamb")
+    assert dawson["title"] == DAWSON_TITLE
+    assert dawson["email"] == "dlamb@easypost.com"
 
 
-def test_missing_phone_is_left_off_the_prepared_by_line():
-    roster, _source = load_preparers([{"name": "Casey Ng", "title": "Account Executive", "email": "casey.ng@example.com"}])
-    rep = roster[0]
-    assert rep["phone"] == ""
-    line = prepared_by_line(rep["name"], rep["title"], rep["email"], rep["phone"])
-    assert line == "Prepared by Casey Ng, Account Executive, EasyPost · casey.ng@example.com"
-    with_phone = prepared_by_line(RILEY["name"], RILEY["title"], RILEY["email"], RILEY["phone"])
-    assert with_phone.endswith("(501) 555-0199")
-    assert "·  ·" not in line
-    assert "·  ·" not in with_phone
-
-
-def test_json_file_is_the_fallback(tmp_path):
-    path = tmp_path / "preparers.json"
-    path.write_text(json.dumps([RILEY, CASEY]), encoding="utf-8")
-    roster, source = load_preparers(None, path)
-    assert source == "file"
-    assert [rep["name"] for rep in roster] == ["Casey Ng", "Riley Chen"]
-
-
-def test_secrets_win_over_the_file(tmp_path):
-    path = tmp_path / "preparers.json"
-    path.write_text(json.dumps([RILEY]), encoding="utf-8")
-    roster, source = load_preparers([CASEY], path)
-    assert source == "secrets"
-    assert [rep["name"] for rep in roster] == ["Casey Ng"]
-
-
-def test_missing_roster_is_empty(tmp_path):
-    roster, source = load_preparers(None, tmp_path / "preparers.json")
-    assert roster == []
-    assert source == ""
-    broken = tmp_path / "preparers.json"
+def test_missing_or_empty_roster_is_empty(tmp_path):
+    assert load_preparers(tmp_path / "missing.json") == []
+    empty = tmp_path / "empty.json"
+    empty.write_text("[]", encoding="utf-8")
+    assert load_preparers(empty) == []
+    blank = tmp_path / "blank.json"
+    blank.write_text('[{"name": "  ", "title": "Skip", "email": "skip@easypost.com"}]', encoding="utf-8")
+    assert load_preparers(blank) == []
+    broken = tmp_path / "broken.json"
     broken.write_text("{not json", encoding="utf-8")
-    roster, source = load_preparers(None, broken)
-    assert roster == []
-    assert source == ""
-    roster, source = load_preparers("Casey Ng", broken)
-    assert roster == []
-    assert source == ""
+    assert load_preparers(broken) == []
+    assert load_preparers(tmp_path) == []
+
+
+def test_file_roster_drops_phone_and_sorts(tmp_path):
+    path = tmp_path / "preparers.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"name": "Riley Chen", "title": "Account Executive", "email": "riley@easypost.com", "phone": "(501) 555-0199"},
+                {"name": "Casey Ng", "title": "Account Executive", "email": "casey@easypost.com"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    roster = load_preparers(path)
+    assert [rep["name"] for rep in roster] == ["Casey Ng", "Riley Chen"]
+    assert all("phone" not in rep for rep in roster)
+
+
+def test_pdf_prepared_by_line_shows_name_title_and_email():
+    line = prepared_by_line("Dawson Lamb", DAWSON_TITLE, "dlamb@easypost.com")
+    assert line == f"Prepared by Dawson Lamb, {DAWSON_TITLE}, EasyPost · dlamb@easypost.com"
+    document = build_customer_quote(
+        {
+            "customer_name": "Alex Chen",
+            "company": "Northwind Goods",
+            "quote_date": "2026-10-19",
+            "preparer_name": "Dawson Lamb",
+            "preparer_title": DAWSON_TITLE,
+            "preparer_email": "dlamb@easypost.com",
+            "shipment": SHIPMENT,
+            "options": [{"carrier_name": "Carrier", "customer_total": 10, "charges": []}],
+        }
+    )
+    assert document["prepared_by"] == line
+    reader = PdfReader(BytesIO(render_customer_pdf(document)))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert line in text
+    assert "phone" not in text.lower()
+    assert "(501)" not in text

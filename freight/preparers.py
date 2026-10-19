@@ -1,7 +1,7 @@
 """Sales-rep roster for the prepared-by line.
 
-The real roster is not in git. Streamlit secrets win, then a local
-preparers.json. An empty result means the form should ask for the details.
+The roster is data/preparers.json in the repo. An empty result means the
+form should ask for name, title, and email by hand.
 """
 
 from __future__ import annotations
@@ -9,50 +9,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "preparers.json"
+
 
 def preparer_id(rep: dict) -> str:
-    return "|".join((rep.get("name") or "", rep.get("email") or "", rep.get("phone") or ""))
+    return "|".join((rep.get("name") or "", rep.get("email") or ""))
 
 
-def load_preparers(secret_rows: object = None, json_path: Path | str | None = None) -> tuple[list[dict], str]:
-    """Return (roster, source). Source is "secrets", "file", or ""."""
-    roster = _normalize(secret_rows)
-    if roster:
-        return roster, "secrets"
-    if json_path is None:
-        return [], ""
-    path = Path(json_path)
+def load_preparers(json_path: Path | str | None = None) -> list[dict]:
+    """Return the roster sorted by name. Missing or invalid files return []."""
+    path = DEFAULT_PATH if json_path is None else Path(json_path)
     if not path.is_file():
-        return [], ""
+        return []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return [], ""
-    roster = _normalize(payload)
-    if roster:
-        return roster, "file"
-    return [], ""
-
-
-def read_preparer_secrets():
-    """The [[preparers]] tables from st.secrets, or None when they are absent."""
-    try:
-        import streamlit as st
-        from streamlit.errors import StreamlitSecretNotFoundError
-    except Exception:
-        return None
-    try:
-        secrets = st.secrets
-    except (StreamlitSecretNotFoundError, FileNotFoundError, RuntimeError):
-        return None
-    except Exception:
-        return None
-    try:
-        if "preparers" not in secrets:
-            return None
-        return secrets["preparers"]
-    except Exception:
-        return None
+        return []
+    return _normalize(payload)
 
 
 def _normalize(rows: object) -> list[dict]:
@@ -81,7 +54,6 @@ def _rep(item: object) -> dict | None:
         "name": name,
         "title": _field(item, "title"),
         "email": _field(item, "email"),
-        "phone": _field(item, "phone"),
     }
 
 

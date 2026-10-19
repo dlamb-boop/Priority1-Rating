@@ -1,9 +1,13 @@
-"""Look up a customer company from its name.
+"""Look up a customer company from its name or from a website.
 
-No API key is required. The chain is Wikidata, then the company homepage
-(schema.org PostalAddress and logo), then icon and favicon fallbacks.
-Google Places is used first for the address and website only when
+No API key is required. The name chain is Wikidata, then the company homepage
+(schema.org Organization / PostalAddress and logo), then icon and favicon
+fallbacks. Google Places is used first for the address and website only when
 GOOGLE_PLACES_API_KEY is set. A domain is never invented from the name.
+
+A typed website uses the same sources keyed on that domain: the homepage and
+/contact or /about, Wikidata's official website (P856), and Google Places
+when a key is set.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ SOURCE_DDG = "DuckDuckGo favicon"
 FAVICON_SOURCES = {SOURCE_GOOGLE_FAVICON, SOURCE_DDG}
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
+WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 PLACES_SEARCH = "https://places.googleapis.com/v1/places:searchText"
 DISAMBIGUATION_QID = "Q4167410"
@@ -225,6 +230,139 @@ def enrich_candidate(candidate: dict) -> dict:
     result["logo_png"] = logo
     result["logo_source"] = logo_source
     return result
+
+
+def lookup_by_website(website: str, places_api_key: str = "") -> dict:
+    """Logo, address, and legal name for a typed domain. Never raises."""
+    domain = normalize_domain(website)
+    if not domain or _skipped_host(domain):
+        return _website_result()
+    try:
+        return _lookup_domain(domain, (places_api_key or "").strip())
+    except Exception:
+        return _website_result()
+
+
+def merge_website_lookup(
+    current: dict,
+    found: dict,
+    locked_fields: object = (),
+    *,
+    name_from_lookup: bool = False,
+) -> dict:
+    """Apply a website lookup without overwriting fields the user typed.
+
+    The company name is replaced only when it is empty or it came from a
+    lookup, and only when "name" is not locked. Address fields in
+    locked_fields stay as they are. A failed lookup clears unlocked address
+    fields and the fetched logo.
+    """
+    locked = {str(field) for field in (locked_fields or ())}
+    merged = {
+        "name": current.get("name") or "",
+        "street": current.get("street") or "",
+        "suite": current.get("suite") or "",
+        "city": current.get("city") or "",
+        "state": current.get("state") or "",
+        "postal": current.get("postal") or "",
+        "country": current.get("country") or "US",
+        "logo_png": current.get("logo_png"),
+        "logo_source": current.get("logo_source") or "",
+        "address_source": current.get("address_source") or "",
+        "name_from_lookup": name_from_lookup,
+    }
+    if not found.get("found"):
+        for field in ("street", "suite", "city", "state", "postal"):
+            if field not in locked:
+                merged[field] = ""
+        if "country" not in locked:
+            merged["country"] = "US"
+        if "logo" not in locked:
+            merged["logo_png"] = None
+            merged["logo_source"] = ""
+        if any(field not in locked for field in ("street", "city", "state", "postal")):
+            merged["address_source"] = ""
+        return merged
+    if "name" not in locked and found.get("name") and (not str(merged["name"]).strip() or name_from_lookup):
+        merged["name"] = found["name"]
+        merged["name_from_lookup"] = True
+    for field in ("street", "suite", "city", "state", "postal"):
+        if field not in locked:
+            merged[field] = found.get(field) or ""
+    if "country" not in locked and found.get("country"):
+        merged["country"] = found["country"]
+    if "logo" not in locked:
+        merged["logo_png"] = found.get("logo_png")
+        merged["logo_source"] = found.get("logo_source") or ""
+    if any(found.get(field) and field not in locked for field in ("street", "suite", "city", "state", "postal")):
+        merged["address_source"] = found.get("address_source") or ""
+    return merged
+
+
+def _website_result() -> dict:
+    return {
+        "found": False,
+        "name": "",
+        "domain": "",
+        "website": "",
+        "street": "",
+        "suite": "",
+        "city": "",
+        "state": "",
+        "postal": "",
+        "country": "",
+        "website_source": "",
+        "address_source": "",
+        "logo_source": "",
+        "logo_png": None,
+    }
+
+
+def _lookup_domain(domain: str, places_key: str) -> dict:
+    site, assets = _pages_for_domain(domain)
+    result = _website_result()
+    result["domain"] = domain
+    result["website"] = f"https://{domain}"
+    for field in ("street", "suite", "city", "state", "postal", "country"):
+        result[field] = site.get(field) or ""
+    result["address_source"] = site.get("address_source") or ""
+    if result["state"] in _STATE_ABBR and not result["country"]:
+        result["country"] = "US"
+    wiki = _wikidata_by_domain(domain)
+    wiki_name = ""
+    logo_filename = ""
+    if wiki:
+        wiki_name = wiki.get("name") or ""
+        logo_filename = wiki.get("logo_filename") or ""
+        _fill_gaps(result, wiki)
+    place_name = ""
+    if places_key:
+        place = _places_for_domain(domain, places_key)
+        if place:
+            place_name = place.get("name") or ""
+            _overwrite_address(result, place)
+    result["name"] = (
+        _usable_name(assets.get("org_name") or "", domain)
+        or _usable_name(wiki_name, domain)
+        or _usable_name(place_name, domain)
+    )
+    logo, logo_source = _best_logo(logo_filename, domain, assets)
+    result["logo_png"] = logo
+    result["logo_source"] = logo_source
+    result["found"] = bool(result["name"] or result["street"] or result["city"] or result["logo_png"])
+    return result
+
+
+def _usable_name(name: str, domain: str) -> str:
+    text = _plain(name, 120)
+    if not text:
+        return ""
+    lowered = text.lower().strip(".")
+    if lowered in {domain, f"www.{domain}"}:
+        return ""
+    if normalize_domain(text) == domain:
+        return ""
+    return text
 
 
 def _headers() -> dict[str, str]:
@@ -624,6 +762,13 @@ def _place_from_hq(hq: dict, entities: dict[str, dict]) -> tuple[str, str, str, 
     return city, state, country, street, postal
 
 
+def _places_for_domain(domain: str, api_key: str) -> dict | None:
+    for candidate in _places_candidates(domain, api_key):
+        if candidate.get("domain") == domain:
+            return candidate
+    return None
+
+
 def _places_candidates(name: str, api_key: str) -> list[dict]:
     body = json.dumps({"textQuery": name, "maxResultCount": 5, "languageCode": "en"}).encode()
     status, raw, _ctype = http_request(
@@ -764,14 +909,19 @@ def _parse_page(html: str, base_url: str) -> dict:
             icons.append((area, url))
     address = {"street": "", "suite": "", "city": "", "state": "", "postal": "", "country": ""}
     logos: list[str] = []
+    org_names = {"legal": [], "display": []}
     for block in parser.blocks:
-        _read_jsonld(block, address, logos, base_url)
+        _read_jsonld(block, address, logos, base_url, org_names)
+    org_name = org_names["legal"][0] if org_names["legal"] else (org_names["display"][0] if org_names["display"] else "")
     return {
         "apple": _best_urls(apples),
         "icons": _best_urls(icons),
         "og_image": urljoin(base_url, parser.og_image) if parser.og_image and not parser.og_image.startswith("data:") else "",
         "logos": logos[:3],
         "address": address,
+        "org_name": org_name,
+        "legal_names": org_names["legal"],
+        "display_names": org_names["display"],
     }
 
 
@@ -795,7 +945,7 @@ def _best_urls(pairs: list[tuple[int, str]]) -> list[str]:
     return urls
 
 
-def _read_jsonld(block: str, address: dict, logos: list[str], base_url: str) -> None:
+def _read_jsonld(block: str, address: dict, logos: list[str], base_url: str, org_names: dict | None = None) -> None:
     try:
         payload = json.loads(block)
     except json.JSONDecodeError:
@@ -804,6 +954,8 @@ def _read_jsonld(block: str, address: dict, logos: list[str], base_url: str) -> 
     orgs = [node for node in nodes if _is_org(node)]
     targets = orgs or nodes
     for node in targets:
+        if org_names is not None and _is_org(node):
+            _collect_org_name(node, org_names)
         if not address["street"]:
             _read_address(node.get("address"), address)
         logo = _logo_url(node.get("logo"))
@@ -818,6 +970,15 @@ def _read_jsonld(block: str, address: dict, logos: list[str], base_url: str) -> 
                 _read_address(node, address)
                 if address["street"]:
                     break
+
+
+def _collect_org_name(node: dict, org_names: dict) -> None:
+    legal = _plain(_text_value(node.get("legalName")), 120)
+    display = _plain(_text_value(node.get("name")), 120)
+    if legal and legal not in org_names["legal"]:
+        org_names["legal"].append(legal)
+    if display and display not in org_names["display"]:
+        org_names["display"].append(display)
 
 
 def _iter_nodes(payload: object):
@@ -883,7 +1044,7 @@ def _text_value(value: object) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        for key in ("name", "text", "value"):
+        for key in ("@value", "name", "text", "value"):
             if isinstance(value.get(key), str):
                 return value[key]
     if isinstance(value, list) and value:
@@ -908,7 +1069,7 @@ def _logo_url(value: object) -> str:
 
 def _enrich_from_site(result: dict) -> dict:
     host, homepage = _fetch_html(result["domain"])
-    assets = {"apple": [], "icons": [], "og_image": "", "logos": [], "address": {}}
+    assets = {"apple": [], "icons": [], "og_image": "", "logos": [], "address": {}, "org_name": ""}
     if homepage:
         assets = _parse_page(homepage, f"https://{host}/")
         _apply_site_address(result, assets["address"])
@@ -919,9 +1080,73 @@ def _enrich_from_site(result: dict) -> dict:
                 continue
             extra = _parse_page(page, f"https://{host}/")
             _apply_site_address(result, extra["address"])
+            if not assets.get("org_name"):
+                assets["org_name"] = extra.get("org_name") or ""
             if result["street"]:
                 break
     return assets
+
+
+def _pages_for_domain(domain: str) -> tuple[dict, dict]:
+    """Homepage plus /contact and /about. Address fills from the first page that has one."""
+    result = _empty_candidate("")
+    result["domain"] = domain
+    result["website"] = f"https://{domain}"
+    host, homepage = _fetch_html(domain)
+    combined = {
+        "apple": [],
+        "icons": [],
+        "og_image": "",
+        "logos": [],
+        "address": {},
+        "org_name": "",
+        "legal_names": [],
+        "display_names": [],
+    }
+    pages = []
+    if homepage:
+        pages.append(_parse_page(homepage, f"https://{host}/"))
+    for suffix in ("contact", "about"):
+        html = _fetch_html_url(f"https://{host}/{suffix}")
+        if html:
+            pages.append(_parse_page(html, f"https://{host}/"))
+    for page in pages:
+        _absorb_page(combined, page)
+        if not result["street"]:
+            _apply_site_address(result, page.get("address") or {})
+    combined["org_name"] = (combined["legal_names"][:1] or combined["display_names"][:1] or [""])[0]
+    return result, combined
+
+
+def _absorb_page(combined: dict, page: dict) -> None:
+    for key in ("apple", "icons", "logos"):
+        for url in page.get(key) or []:
+            if url not in combined[key]:
+                combined[key].append(url)
+    if not combined.get("og_image") and page.get("og_image"):
+        combined["og_image"] = page["og_image"]
+    for key in ("legal_names", "display_names"):
+        for name in page.get(key) or []:
+            if name not in combined[key]:
+                combined[key].append(name)
+
+
+def _overwrite_address(result: dict, extra: dict) -> None:
+    """Places address replaces earlier sources field by field when it has a value."""
+    filled = False
+    for field in ("street", "suite", "city", "state", "postal", "country"):
+        value = extra.get(field) or ""
+        if field == "state":
+            value = _state_abbrev(value) or value
+        if field == "country":
+            value = _country_code(value)
+        if value:
+            result[field] = value
+            filled = True
+    if result.get("state") in _STATE_ABBR and not result.get("country"):
+        result["country"] = "US"
+    if filled:
+        result["address_source"] = SOURCE_PLACES
 
 
 def _apply_site_address(result: dict, address: dict) -> None:
@@ -1034,6 +1259,59 @@ def _commons_thumb(filename: str) -> str:
         if original and not original.lower().split("?")[0].endswith(".svg"):
             return original
     return ""
+
+
+def _wikidata_by_domain(domain: str) -> dict | None:
+    """First Wikidata item whose official website (P856) is this domain."""
+    safe = domain.replace("\\", "").replace('"', "")
+    query = (
+        "SELECT ?item ?url WHERE { "
+        "?item wdt:P856 ?url . "
+        f'FILTER(CONTAINS(LCASE(STR(?url)), "{safe}")) '
+        "} LIMIT 8"
+    )
+    payload = _json_body(
+        *http_get(
+            f"{WIKIDATA_SPARQL}?{urlencode({'query': query, 'format': 'json'})}",
+            headers={**_headers(), "Accept": "application/sparql-results+json"},
+        )[:2]
+    )
+    if not payload:
+        return None
+    qids: list[str] = []
+    for row in (payload.get("results") or {}).get("bindings") or []:
+        if not isinstance(row, dict):
+            continue
+        item = ((row.get("item") or {}).get("value") or "")
+        qid = str(item).rstrip("/").split("/")[-1]
+        if qid.startswith("Q") and qid[1:].isdigit() and qid not in qids:
+            qids.append(qid)
+    if not qids:
+        return None
+    entities = _fetch_entities(qids)
+    chosen_id = ""
+    chosen: dict | None = None
+    hq_ids: list[str] = []
+    for qid in qids:
+        entity = entities.get(qid) or {}
+        if not entity or _is_disambiguation(entity):
+            continue
+        websites = [_snak_text(claim.get("mainsnak") or {}) for claim in _claims(entity, "P856")]
+        if not any(normalize_domain(website) == domain for website in websites):
+            continue
+        chosen_id = qid
+        chosen = entity
+        for claim in _claims(entity, "P159"):
+            hq_id = _entity_id(claim)
+            if hq_id:
+                hq_ids.append(hq_id)
+        break
+    if not chosen:
+        return None
+    _fetch_admin_chain(entities, hq_ids)
+    candidate = _candidate_from_entity(chosen, {"id": chosen_id, "label": _entity_label(chosen), "rank": 0})
+    _wikidata_candidates_finalize([candidate], entities)
+    return candidate
 
 
 # The HQ id is stashed on the candidate while entities are still in scope.
