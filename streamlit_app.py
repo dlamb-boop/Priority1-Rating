@@ -215,13 +215,26 @@ def _read_items() -> list[dict]:
 
 
 def _preparer_fields() -> None:
+    st.markdown("Prepare a custom customer LTL/FTL quote")
+    st.text_input("Your name", key="preparer_name", placeholder="Priya Shah", live=True)
+    st.text_input("Title", key="preparer_title", placeholder="Account Executive", live=True)
+    st.text_input("Email", key="preparer_email", placeholder="priya@easypost.com", live=True)
+    st.text_input("Phone", key="preparer_phone", placeholder="(501) 555-0148", live=True)
+
+
+def _preparer_summary() -> None:
+    """Read-only echo of the sidebar fields. Same session keys, no second inputs."""
+    lines = [
+        (st.session_state.get(key) or "").strip()
+        for key in ("preparer_name", "preparer_title", "preparer_email", "preparer_phone")
+    ]
+    filled = [line for line in lines if line]
+    if not filled:
+        st.caption("Add your details in the sidebar")
+        return
     st.markdown("**Prepared by**")
-    st.caption("Printed on the customer PDF. The company is EasyPost.")
-    name, title, email, phone = st.columns(4)
-    name.text_input("Your name", key="preparer_name", placeholder="Priya Shah")
-    title.text_input("Title", key="preparer_title", placeholder="Account Executive")
-    email.text_input("Email", key="preparer_email", placeholder="priya@easypost.com")
-    phone.text_input("Phone", key="preparer_phone", placeholder="(501) 555-0148")
+    for line in filled:
+        st.text(line)
 
 
 def _lane_fields() -> None:
@@ -517,16 +530,16 @@ def main() -> None:
     _boot()
     config = get_config()
     with st.sidebar:
+        st.image(str(LOGO), width="stretch")
+        st.markdown('<p class="ep-title">EasyPost</p>', unsafe_allow_html=True)
+        st.caption(
+            "Shop LTL rates, and truckload when the account allows it. Customer quotes show the sell price only."
+        )
+        _preparer_fields()
         st.markdown("**Freight quote desk**")
         st.markdown(f"<span class='ep-chip'>{config.mode_label}</span>", unsafe_allow_html=True)
-    st.image(str(LOGO), width=260)
-    st.markdown('<p class="ep-kicker">EASYPOST</p>', unsafe_allow_html=True)
     st.markdown('<p class="ep-title">Quote freight without leaving the desk.</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="ep-sub">Shop LTL rates, and truckload when the account allows it. Customer quotes show the sell price only.</p>',
-        unsafe_allow_html=True,
-    )
-    _preparer_fields()
+    _preparer_summary()
     if st.button("Load sample lane", key="load_sample"):
         _load_sample()
         st.rerun()
