@@ -13,6 +13,7 @@ from freight.company_lookup import enrich_candidate, image_to_png, search_compan
 from freight.config import get_config, read_setting
 from freight.constants import EQUIPMENT_LABELS, EQUIPMENT_TYPES, FREIGHT_CLASSES, PACKAGING_TYPES
 from freight.customer import build_customer_quote, format_customer_address, to_customer_rate
+from freight.preparers import load_preparers, preparer_id, read_preparer_secrets
 from freight.markup import MARKUP_DEFAULT, MARKUP_MAX, MARKUP_MIN
 from freight.pdf_quote import filename_for, render_customer_pdf
 from freight.quote import public_error, quote_ltl, quote_tl, suggest_class
@@ -128,6 +129,7 @@ def _boot() -> None:
     ss.tl_desc = ""
     ss.tl_lift = False
     ss.tl_quote = None
+    ss.preparer_choice = ""
     ss.preparer_name = ""
     ss.preparer_title = ""
     ss.preparer_email = ""
@@ -249,12 +251,63 @@ def _read_items() -> list[dict]:
     return items
 
 
+def _roster() -> list[dict]:
+    roster, _source = load_preparers(read_preparer_secrets(), ROOT / "preparers.json")
+    st.session_state._preparer_roster = roster
+    return roster
+
+
+def _select_preparer() -> None:
+    choice = st.session_state.get("preparer_choice") or ""
+    roster = st.session_state.get("_preparer_roster") or []
+    match = next((rep for rep in roster if preparer_id(rep) == choice), None)
+    if match is None:
+        st.session_state.preparer_name = ""
+        st.session_state.preparer_title = ""
+        st.session_state.preparer_email = ""
+        st.session_state.preparer_phone = ""
+        return
+    st.session_state.preparer_name = match["name"]
+    st.session_state.preparer_title = match["title"]
+    st.session_state.preparer_email = match["email"]
+    st.session_state.preparer_phone = match["phone"]
+
+
+def _preparer_label(rep: dict, roster: list[dict]) -> str:
+    if sum(1 for item in roster if item["name"] == rep["name"]) > 1 and rep["email"]:
+        return f"{rep['name']} ({rep['email']})"
+    return rep["name"]
+
+
 def _preparer_fields() -> None:
     st.markdown("Prepare a custom customer LTL/FTL quote")
-    st.text_input("Your name", key="preparer_name", placeholder="Priya Shah", live=True)
-    st.text_input("Title", key="preparer_title", placeholder="Account Executive", live=True)
-    st.text_input("Email", key="preparer_email", placeholder="priya@easypost.com", live=True)
-    st.text_input("Phone", key="preparer_phone", placeholder="(501) 555-0148", live=True)
+    roster = _roster()
+    if not roster:
+        st.warning("No sales roster found. Enter your details, or add preparers to secrets or preparers.json.")
+        st.text_input("Your name", key="preparer_name", placeholder="Casey Ng", live=True)
+        st.text_input("Title", key="preparer_title", placeholder="Account Executive", live=True)
+        st.text_input("Email", key="preparer_email", placeholder="casey.ng@example.com", live=True)
+        st.text_input("Phone", key="preparer_phone", placeholder="Optional", live=True)
+        return
+    if "preparer_choice" not in st.session_state:
+        st.session_state.preparer_choice = ""
+    labels = {"": "Select your name"}
+    labels.update({preparer_id(rep): _preparer_label(rep, roster) for rep in roster})
+    st.selectbox(
+        "Your name",
+        [""] + [preparer_id(rep) for rep in roster],
+        format_func=lambda value: labels.get(value, "Select your name"),
+        key="preparer_choice",
+        on_change=_select_preparer,
+        filter_mode="fuzzy",
+        help="Pick your name. Title, email, and phone fill in for this quote.",
+    )
+    email = (st.session_state.get("preparer_email") or "").strip()
+    if email:
+        st.caption(email)
+    with st.expander("Edit details"):
+        st.text_input("Title", key="preparer_title", live=True)
+        st.text_input("Phone", key="preparer_phone", placeholder="Optional", live=True)
 
 
 def _preparer_summary() -> None:
