@@ -73,10 +73,6 @@ EQUIPMENT_LABELS = {
 TL_SERVICE_TYPES = ["Full", "Team"]
 WEIGHT_UNITS = ["lbs", "kg"]
 
-PREPARED_BY = (
-    "Prepared by Dawson Lamb, Director of Supply Chain Solutions and Partnerships, EasyPost"
-)
-
 ZIP_HINTS = {
     "02101": ("Boston", "MA"),
     "10001": ("New York", "NY"),

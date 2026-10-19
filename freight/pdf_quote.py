@@ -13,8 +13,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from freight.constants import PREPARED_BY
-from freight.customer import customer_pdf_filename
+from freight.customer import customer_pdf_filename, prepared_by_line
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGO = ROOT / "assets" / "easypost-logo.png"
@@ -80,17 +79,19 @@ def render_customer_pdf(document: dict) -> bytes:
     width, height = letter
     _draw_document(pdf, document, width, height)
     pdf.save()
-    return _rewrite_metadata(buffer.getvalue())
+    return _rewrite_metadata(buffer.getvalue(), document)
 
 
-def _rewrite_metadata(raw: bytes) -> bytes:
+def _rewrite_metadata(raw: bytes, document: dict) -> bytes:
+    name = (document.get("preparer_name") or "").strip()
+    author = f"{name}, EasyPost" if name else "EasyPost"
     reader = PdfReader(BytesIO(raw))
     writer = PdfWriter()
     writer.append(reader)
     writer.add_metadata(
         {
             "/Title": "EasyPost Freight Quote",
-            "/Author": "Dawson Lamb, EasyPost",
+            "/Author": author,
             "/Subject": "Customer freight quote",
             "/Keywords": "EasyPost, freight quote",
             "/Creator": "EasyPost Freight Quotes",
@@ -138,18 +139,27 @@ def _wrap(text: str, font: str, size: float, max_width: float) -> list[str]:
 
 
 def _footer(pdf: canvas.Canvas, document: dict, width: float) -> None:
-    pdf.setFillColor(BLUE)
-    pdf.rect(40, 56, width - 80, 2, fill=1, stroke=0)
-    pdf.setFillColor(NAVY)
-    pdf.setFont("Poppins", 7.5)
-    pdf.drawString(40, 42, PREPARED_BY)
-    pdf.setFillColor(MUTED)
-    pdf.setFont("Poppins", 7)
+    prepared = document.get("prepared_by") or prepared_by_line()
+    prepared_lines = _wrap(prepared, "Poppins", 7.5, width - 80)
     note = "Estimate only. This is not a tender. The rate can change if the shipment differs from the details above."
     if document.get("mention_capacity_partner"):
         note += " Capacity sourced through Priority1."
-    for index, line in enumerate(_wrap(note, "Poppins", 7, width - 80)):
-        pdf.drawString(40, 28 - index * 10, line)
+    note_lines = _wrap(note, "Poppins", 7, width - 80)
+    rule_y = 16 + len(note_lines) * 10 + 4 + len(prepared_lines) * 11 + 14
+    pdf.setFillColor(BLUE)
+    pdf.rect(40, rule_y, width - 80, 2, fill=1, stroke=0)
+    pdf.setFillColor(NAVY)
+    pdf.setFont("Poppins", 7.5)
+    cursor = rule_y - 14
+    for line in prepared_lines:
+        pdf.drawString(40, cursor, line)
+        cursor -= 11
+    pdf.setFillColor(MUTED)
+    pdf.setFont("Poppins", 7)
+    cursor -= 4
+    for line in note_lines:
+        pdf.drawString(40, cursor, line)
+        cursor -= 10
 
 
 def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: float) -> None:

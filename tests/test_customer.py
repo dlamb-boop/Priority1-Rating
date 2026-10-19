@@ -3,7 +3,13 @@ import os
 
 import pytest
 
-from freight.customer import assert_customer_safe, build_customer_quote, customer_pdf_filename, to_customer_rate
+from freight.customer import (
+    assert_customer_safe,
+    build_customer_quote,
+    customer_pdf_filename,
+    prepared_by_line,
+    to_customer_rate,
+)
 from freight.quote import quote_ltl, quote_tl
 
 os.environ["P1_API_KEY"] = ""
@@ -77,6 +83,29 @@ def _polluted_rate() -> dict:
         "carrier_quote_number": "Q1234",
         "priority1_quote_id": 123456,
     }
+
+
+def test_prepared_by_line_uses_what_was_entered():
+    assert prepared_by_line() == "Prepared by EasyPost"
+    assert prepared_by_line("   ", "") == "Prepared by EasyPost"
+    assert prepared_by_line("Priya Shah") == "Prepared by Priya Shah, EasyPost"
+    assert prepared_by_line("Priya Shah", "Logistics Manager") == "Prepared by Priya Shah, Logistics Manager, EasyPost"
+    assert (
+        prepared_by_line("Priya Shah", "Logistics Manager", "priya@easypost.com", "(501) 555-0148")
+        == "Prepared by Priya Shah, Logistics Manager, EasyPost · priya@easypost.com · (501) 555-0148"
+    )
+    assert prepared_by_line("", "", "", "(501) 555-0148") == "Prepared by EasyPost · (501) 555-0148"
+    document = build_customer_quote(
+        {
+            "company": "Northwind Goods",
+            "preparer_name": "Priya Shah",
+            "preparer_title": "Logistics Manager",
+            "shipment": SHIPMENT,
+            "options": [_polluted_rate()],
+        }
+    )
+    assert document["prepared_by"] == "Prepared by Priya Shah, Logistics Manager, EasyPost"
+    assert "dawson" not in json.dumps(document).lower()
 
 
 def test_customer_payload_drops_internal_economics():

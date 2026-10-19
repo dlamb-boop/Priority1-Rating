@@ -17,10 +17,11 @@ from freight.quote import public_error, quote_ltl, quote_tl, suggest_class
 
 ROOT = Path(__file__).resolve().parent
 LOGO = ROOT / "assets" / "easypost-logo.png"
+ICON = ROOT / "assets" / "easypost-icon.png"
 
 st.set_page_config(
     page_title="EasyPost Freight Quotes",
-    page_icon=str(LOGO),
+    page_icon=str(ICON),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -125,14 +126,10 @@ def _boot() -> None:
     ss.tl_desc = ""
     ss.tl_lift = False
     ss.tl_quote = None
-
-
-def _brand_logo() -> None:
-    """Header wordmark. Fall back if this Streamlit build has no size argument."""
-    try:
-        st.logo(str(LOGO), size="large")
-    except TypeError:
-        st.logo(str(LOGO))
+    ss.preparer_name = ""
+    ss.preparer_title = ""
+    ss.preparer_email = ""
+    ss.preparer_phone = ""
 
 
 def _load_sample() -> None:
@@ -215,6 +212,16 @@ def _read_items() -> list[dict]:
             }
         )
     return items
+
+
+def _preparer_fields() -> None:
+    st.markdown("**Prepared by**")
+    st.caption("Printed on the customer PDF. The company is EasyPost.")
+    name, title, email, phone = st.columns(4)
+    name.text_input("Your name", key="preparer_name", placeholder="Priya Shah")
+    title.text_input("Title", key="preparer_title", placeholder="Account Executive")
+    email.text_input("Email", key="preparer_email", placeholder="priya@easypost.com")
+    phone.text_input("Phone", key="preparer_phone", placeholder="(501) 555-0148")
 
 
 def _lane_fields() -> None:
@@ -399,6 +406,10 @@ def _rates_panel(quote: dict, product: str) -> None:
             {
                 "customer_name": st.session_state.customer_name,
                 "company": st.session_state.company,
+                "preparer_name": st.session_state.preparer_name,
+                "preparer_title": st.session_state.preparer_title,
+                "preparer_email": st.session_state.preparer_email,
+                "preparer_phone": st.session_state.preparer_phone,
                 "show_priority1": st.session_state[partner_key],
                 "shipment": quote["shipment"],
                 "options": selected,
@@ -504,20 +515,18 @@ def _tl_tab() -> None:
 
 def main() -> None:
     _boot()
-    _brand_logo()
     config = get_config()
     with st.sidebar:
-        st.image(str(LOGO), width="stretch")
         st.markdown("**Freight quote desk**")
         st.markdown(f"<span class='ep-chip'>{config.mode_label}</span>", unsafe_allow_html=True)
-        st.caption("Dawson Lamb")
-        st.caption("Director of Supply Chain Solutions and Partnerships")
+    st.image(str(LOGO), width=260)
     st.markdown('<p class="ep-kicker">EASYPOST</p>', unsafe_allow_html=True)
     st.markdown('<p class="ep-title">Quote freight without leaving the desk.</p>', unsafe_allow_html=True)
     st.markdown(
         '<p class="ep-sub">Shop LTL rates, and truckload when the account allows it. Customer quotes show the sell price only.</p>',
         unsafe_allow_html=True,
     )
+    _preparer_fields()
     if st.button("Load sample lane", key="load_sample"):
         _load_sample()
         st.rerun()

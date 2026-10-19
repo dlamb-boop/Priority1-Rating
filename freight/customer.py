@@ -6,8 +6,6 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 
-from freight.constants import PREPARED_BY
-
 FORBIDDEN = [
     "markup",
     "basecost",
@@ -148,9 +146,15 @@ def build_customer_quote(payload: dict) -> dict:
         cleaned = _clean(label, 80)
         if cleaned:
             accessorials.append(cleaned)
+    preparer_name = _clean(payload.get("preparer_name"), 80)
+    preparer_title = _clean(payload.get("preparer_title"), 80)
+    preparer_email = _clean(payload.get("preparer_email"), 80)
+    preparer_phone = _clean(payload.get("preparer_phone"), 40)
     return {
         "customer_name": _clean(payload.get("customer_name"), 80),
         "company": _clean(payload.get("company"), 80),
+        "preparer_name": preparer_name,
+        "prepared_by": prepared_by_line(preparer_name, preparer_title, preparer_email, preparer_phone),
         "quote_date": quote_date,
         "valid_through": expirations[0] if expirations else _add_days(quote_date, 7),
         "reference": _reference(quote_date, origin_zip, destination_zip),
@@ -200,5 +204,11 @@ def assert_customer_safe(document: dict, raw_base_amounts: list[str] | None = No
             raise AssertionError("Customer quote includes a pre-markup amount.")
 
 
-def prepared_by_line() -> str:
-    return PREPARED_BY
+def prepared_by_line(name: str = "", title: str = "", email: str = "", phone: str = "") -> str:
+    """Customer footer. EasyPost is always the company; blank contact parts are left out."""
+    who = ", ".join(part for part in (_clean(name, 80), _clean(title, 80), "EasyPost") if part)
+    contact = " · ".join(part for part in (_clean(email, 80), _clean(phone, 40)) if part)
+    line = f"Prepared by {who}"
+    if contact:
+        line = f"{line} · {contact}"
+    return line

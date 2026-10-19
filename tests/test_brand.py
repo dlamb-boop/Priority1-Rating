@@ -11,6 +11,16 @@ def test_theme_uses_deck_hex_values():
     assert 'font = "sans serif"' in theme
 
 
+def test_icon_is_square_transparent_png():
+    data = (ROOT / "assets" / "easypost-icon.png").read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert data[12:16] == b"IHDR"
+    width, height, _depth, color_type = struct.unpack(">IIBB", data[16:26])
+    assert color_type == 6
+    assert width == height
+    assert width >= 256
+
+
 def test_logo_is_transparent_png():
     data = (ROOT / "assets" / "easypost-logo.png").read_bytes()
     assert data.startswith(b"\x89PNG\r\n\x1a\n")

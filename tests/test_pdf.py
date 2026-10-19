@@ -53,6 +53,9 @@ def test_pdf_shows_sell_price_and_hides_buy_rate():
             "customer_name": "Alex Chen",
             "company": "Northwind Goods",
             "quote_date": "2026-10-19",
+            "preparer_name": "Priya Shah",
+            "preparer_title": "Logistics Manager",
+            "preparer_email": "priya@easypost.com",
             "show_priority1": False,
             "shipment": SHIPMENT,
             "options": [
@@ -93,14 +96,14 @@ def test_pdf_shows_sell_price_and_hides_buy_rate():
     assert "Southeastern Freight" in parsed["text"]
     assert "SEFL" in parsed["text"]
     assert "$252.40" in parsed["text"]
-    assert "Dawson Lamb" in parsed["text"]
-    assert "Director of Supply Chain Solutions and Partnerships" in parsed["text"]
+    assert "Prepared by Priya Shah, Logistics Manager, EasyPost · priya@easypost.com" in parsed["text"]
+    assert "dawson" not in haystack
     for page in parsed["pages"]:
-        assert "Dawson Lamb" in page
+        assert "Priya Shah" in page
     for token in ["markup", "base cost", "basecost", "margin", "235.89", "196.43", "16.51", "21108", "q1234", "priority1"]:
         assert token not in haystack
     assert parsed["info"].get("/Title") == "EasyPost Freight Quote"
-    assert "Dawson Lamb" in parsed["info"].get("/Author", "")
+    assert parsed["info"].get("/Author") == "Priya Shah, EasyPost"
     assert filename_for(document) == "EasyPost-Freight-Quote-2026-10-19.pdf"
 
 
