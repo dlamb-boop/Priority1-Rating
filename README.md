@@ -2,9 +2,7 @@
 
 Internal rating desk for Dawson Lamb. It quotes LTL freight (and truckload, when the account allows it), applies a hidden 5–10% markup, and exports a customer-facing PDF that shows only the sell price.
 
-The app is a Streamlit desk meant for [Streamlit Community Cloud](https://share.streamlit.io). No API key is required to try it. With `P1_API_KEY` empty, the app runs in demo mode and returns realistic sample rates.
-
-The public URL would expose internal costs, so the desk stays locked until `APP_PASSWORD` is set, and the Community Cloud app should be **private** (invite viewers only). The password is an extra gate, not a substitute for a private app.
+The app is a Streamlit desk meant for [Streamlit Community Cloud](https://share.streamlit.io). It loads directly, with no password. No API key is required to try it. With `P1_API_KEY` empty, the app runs in demo mode and returns realistic sample rates. The API key stays in Streamlit secrets and is never shown in the UI.
 
 ## Brand
 
@@ -33,12 +31,11 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 streamlit run streamlit_app.py
 ```
 
-Open the URL Streamlit prints (usually http://localhost:8501) and enter the `APP_PASSWORD` from secrets.
+Open the URL Streamlit prints (usually http://localhost:8501). The quote form loads immediately.
 
 Demo mode with environment variables, and no secrets file:
 
 ```bash
-export APP_PASSWORD=choose-a-password
 export P1_API_KEY=
 export P1_BASE_URL=https://dev-api.priority1.com
 export P1_MOCK=true
@@ -55,8 +52,7 @@ Streamlit secrets win. If a key is absent there, the same name is read from the 
 
 | Name | Purpose |
 | --- | --- |
-| `APP_PASSWORD` | Required. The desk does not load until this matches. |
-| `P1_API_KEY` | Priority1 key, sent only as the `X-API-KEY` header. Leave blank for demo mode. Never shown in the UI. |
+| `P1_API_KEY` | Priority1 key, sent only as the `X-API-KEY` header. Leave blank for demo mode. Stays in Streamlit secrets and is never shown in the UI. |
 | `P1_BASE_URL` | `https://dev-api.priority1.com` (sandbox, the default) or `https://api.priority1.com` (production). |
 | `P1_MOCK` | `true` forces demo rates even when a key is present. |
 
@@ -67,7 +63,6 @@ Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Do not comm
 Demo (no key):
 
 ```toml
-APP_PASSWORD = "choose-a-password"
 P1_API_KEY = ""
 P1_BASE_URL = "https://dev-api.priority1.com"
 P1_MOCK = "true"
@@ -76,7 +71,6 @@ P1_MOCK = "true"
 Sandbox:
 
 ```toml
-APP_PASSWORD = "choose-a-password"
 P1_API_KEY = "your-sandbox-key"
 P1_BASE_URL = "https://dev-api.priority1.com"
 P1_MOCK = "false"
@@ -85,7 +79,6 @@ P1_MOCK = "false"
 Production:
 
 ```toml
-APP_PASSWORD = "choose-a-password"
 P1_API_KEY = "your-production-key"
 P1_BASE_URL = "https://api.priority1.com"
 P1_MOCK = "false"
@@ -110,15 +103,13 @@ Live rate calls can take up to about 15 seconds because Priority1 waits on each 
 5. Paste secrets into the **Secrets** box (the same keys as `.streamlit/secrets.toml.example`):
 
    ```toml
-   APP_PASSWORD = "choose-a-password"
    P1_API_KEY = ""
    P1_BASE_URL = "https://dev-api.priority1.com"
    P1_MOCK = "true"
    ```
 
-   Leave `P1_API_KEY` blank for demo rates. For live rates, paste the sandbox or production key, set `P1_BASE_URL` to match, and set `P1_MOCK` to `"false"`.
-6. Deploy.
-7. After the app is up, open **Settings → Sharing** and set the app to **private**. Invite only the people who should see it. A public app would expose the internal-cost panel to anyone who has the password.
+   Leave `P1_API_KEY` blank for demo rates. For live rates, paste the sandbox or production key, set `P1_BASE_URL` to match, and set `P1_MOCK` to `"false"`. The key stays in this secrets box and is never shown in the UI.
+6. Deploy. Sharing can be left public.
 
 ## Spec notes
 

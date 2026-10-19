@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hmac
 from datetime import date, timedelta
 from pathlib import Path
 
 import streamlit as st
 
 from freight.accessorials import ACCESSORIALS, code_from_label, option_label
-from freight.config import get_config, read_setting
+from freight.config import get_config
 from freight.constants import EQUIPMENT_LABELS, EQUIPMENT_TYPES, FREIGHT_CLASSES, PACKAGING_TYPES
 from freight.customer import build_customer_quote, to_customer_rate
 from freight.markup import MARKUP_DEFAULT, MARKUP_MAX, MARKUP_MIN
@@ -126,7 +125,6 @@ def _boot() -> None:
     ss.tl_desc = ""
     ss.tl_lift = False
     ss.tl_quote = None
-    ss.authed = False
 
 
 def _brand_logo() -> None:
@@ -135,30 +133,6 @@ def _brand_logo() -> None:
         st.logo(str(LOGO), size="large")
     except TypeError:
         st.logo(str(LOGO))
-
-
-def _password_gate() -> None:
-    expected = read_setting("APP_PASSWORD")
-    _brand_logo()
-    if not expected:
-        st.markdown('<p class="ep-kicker">EASYPOST</p>', unsafe_allow_html=True)
-        st.markdown('<p class="ep-title">Freight quote desk</p>', unsafe_allow_html=True)
-        st.error("This desk is locked. Set APP_PASSWORD in secrets before anyone can open it.")
-        st.stop()
-    if st.session_state.get("authed"):
-        return
-    st.markdown('<p class="ep-kicker">EASYPOST</p>', unsafe_allow_html=True)
-    st.markdown('<p class="ep-title">Freight quote desk</p>', unsafe_allow_html=True)
-    st.caption("Dawson Lamb · internal rating desk")
-    with st.form("gate"):
-        entered = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Continue", type="primary")
-    if submitted:
-        if hmac.compare_digest(entered, expected):
-            st.session_state.authed = True
-            st.rerun()
-        st.error("That password is not recognized.")
-    st.stop()
 
 
 def _load_sample() -> None:
@@ -530,7 +504,7 @@ def _tl_tab() -> None:
 
 def main() -> None:
     _boot()
-    _password_gate()
+    _brand_logo()
     config = get_config()
     with st.sidebar:
         st.image(str(LOGO), width="stretch")
