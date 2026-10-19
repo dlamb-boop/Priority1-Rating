@@ -1,11 +1,12 @@
 import json
 from io import BytesIO
+from pathlib import Path
 
 from pypdf import PdfReader
 
 from freight.customer import build_customer_quote, prepared_by_line
 from freight.pdf_quote import render_customer_pdf
-from freight.preparers import load_preparers
+from freight.preparers import ADD_PREPARER, DEFAULT_PATH, apply_preparer_choice, load_preparers, preparer_id, preparer_options
 
 DAWSON_TITLE = "Director of Supply Chain Solutions and Partnerships"
 
@@ -72,6 +73,44 @@ def test_file_roster_drops_phone_and_sorts(tmp_path):
     roster = load_preparers(path)
     assert [rep["name"] for rep in roster] == ["Casey Ng", "Riley Chen"]
     assert all("phone" not in rep for rep in roster)
+
+
+def test_add_a_new_person_is_manual_and_does_not_change_the_roster():
+    roster = load_preparers()
+    original = Path(DEFAULT_PATH).read_bytes()
+    options = preparer_options(roster)
+    assert options[0] == ("", "Select your name")
+    assert options[-1] == (ADD_PREPARER, "+ Add a new person")
+    assert options[-2][0] == preparer_id(roster[-1])
+    custom = {"name": "Alex Rivera", "title": "Account Executive", "email": "arivera@easypost.com", "phone": "(501) 555-0100"}
+    applied = apply_preparer_choice(ADD_PREPARER, roster, custom)
+    assert applied == {"name": "Alex Rivera", "title": "Account Executive", "email": "arivera@easypost.com"}
+    assert "phone" not in applied
+    assert Path(DEFAULT_PATH).read_bytes() == original
+    assert all(rep["name"] != "Alex Rivera" for rep in load_preparers())
+    dawson = next(rep for rep in roster if rep["name"] == "Dawson Lamb")
+    from_roster = apply_preparer_choice(preparer_id(dawson), roster, custom)
+    assert from_roster["name"] == "Dawson Lamb"
+    assert from_roster["email"] == "dlamb@easypost.com"
+    line = prepared_by_line(applied["name"], applied["title"], applied["email"])
+    assert line == "Prepared by Alex Rivera, Account Executive, EasyPost · arivera@easypost.com"
+    document = build_customer_quote(
+        {
+            "customer_name": "Alex Chen",
+            "company": "Northwind Goods",
+            "quote_date": "2026-10-19",
+            "preparer_name": applied["name"],
+            "preparer_title": applied["title"],
+            "preparer_email": applied["email"],
+            "shipment": SHIPMENT,
+            "options": [{"carrier_name": "Carrier", "customer_total": 10, "charges": []}],
+        }
+    )
+    reader = PdfReader(BytesIO(render_customer_pdf(document)))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert line in text
+    assert "phone" not in text.lower()
+    assert "(501)" not in text
 
 
 def test_pdf_prepared_by_line_shows_name_title_and_email():

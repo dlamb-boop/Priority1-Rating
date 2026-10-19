@@ -11,9 +11,41 @@ from pathlib import Path
 
 DEFAULT_PATH = Path(__file__).resolve().parents[1] / "data" / "preparers.json"
 
+ADD_PREPARER = "__add_preparer__"
+ADD_PREPARER_LABEL = "+ Add a new person"
+
 
 def preparer_id(rep: dict) -> str:
     return "|".join((rep.get("name") or "", rep.get("email") or ""))
+
+
+def preparer_label(rep: dict, roster: list[dict]) -> str:
+    if sum(1 for item in roster if item["name"] == rep["name"]) > 1 and rep.get("email"):
+        return f"{rep['name']} ({rep['email']})"
+    return rep["name"]
+
+
+def preparer_options(roster: list[dict]) -> list[tuple[str, str]]:
+    """Dropdown values and labels. The add-a-person choice is always last."""
+    options = [("", "Select your name")]
+    options.extend((preparer_id(rep), preparer_label(rep, roster)) for rep in roster)
+    options.append((ADD_PREPARER, ADD_PREPARER_LABEL))
+    return options
+
+
+def apply_preparer_choice(choice: str, roster: list[dict], custom: dict | None = None) -> dict:
+    """Name, title, and email for a dropdown choice. Does not change the roster."""
+    if choice == ADD_PREPARER:
+        entered = custom or {}
+        return {
+            "name": _field(entered, "name"),
+            "title": _field(entered, "title"),
+            "email": _field(entered, "email"),
+        }
+    match = next((rep for rep in roster if preparer_id(rep) == choice), None)
+    if match is None:
+        return {"name": "", "title": "", "email": ""}
+    return {"name": match["name"], "title": match["title"], "email": match["email"]}
 
 
 def load_preparers(json_path: Path | str | None = None) -> list[dict]:

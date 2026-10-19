@@ -61,7 +61,7 @@ Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. Do not comm
 
 ### Sales roster
 
-The sidebar dropdown loads `data/preparers.json`. Each entry has `name`, `title`, and `email`. Names are sorted A to Z. Choosing a name fills title and email. Title and email can be changed for that quote under **Edit details**. If the file is missing or empty, the sidebar asks for name, title, and email by hand.
+The sidebar dropdown loads `data/preparers.json`. Each entry has `name`, `title`, and `email`. Names are sorted A to Z. Choosing a name fills title and email. Title and email can be changed for that quote under **Edit details**. The last option, **+ Add a new person**, shows name, title, and email fields for someone who is not on the roster. What is typed there fills the main page and the PDF for this session and is not written back to `data/preparers.json`. If the file is missing or empty, the sidebar asks for name, title, and email by hand.
 
 ### Sandbox and production
 
@@ -99,7 +99,7 @@ Live rate calls can take up to about 15 seconds because Priority1 waits on each 
 - Customer company: type the company name and press **Look up**. The desk fills the website, logo, and address. If several companies match, pick one from the list (name, city, and domain). The filled fields stay visible and can be corrected under **Edit details**. If nothing is found, the address is left blank. A domain is never invented from the name.
 - If the name lookup misses, type the customer website under **Edit details**. That runs the lookup again for that domain and shows **Found from website**. It fills the logo, the address, and the company name when the name is empty or still the one from the name lookup. Fields typed by hand are left as entered.
 - Lookup order, with short timeouts: Wikidata (official website, logo, and headquarters), then the company homepage and, if needed, `/contact` or `/about` for a schema.org address, organization name, and logo, then the site icon and a favicon service. A typed website also searches Wikidata by official website (P856). When `GOOGLE_PLACES_API_KEY` is set, Google Places is the first source for a name lookup and is used for a website lookup when the place's website matches that domain.
-- Prepared by: choose a sales rep from the sidebar dropdown. Title and email fill in from `data/preparers.json` and show on the main page. Title and email can be edited for that quote. The PDF line always ends with EasyPost.
+- Prepared by: choose a sales rep from the sidebar dropdown. Title and email fill in from `data/preparers.json` and show on the main page. Title and email can be edited for that quote. **+ Add a new person** is the last option and takes a name, title, and email for this session only. The PDF line always ends with EasyPost.
 - Customer PDF for the options you check. It includes the EasyPost logo, the customer, the looked-up company address, the customer logo when one was found, the shipment, sell prices, the quote date and validity, and a prepared-by line on every page. The website URL is not printed. Priority1 is omitted unless **Mention Priority1 on the customer PDF** is checked. The filename is `EasyPost-Freight-Quote-YYYY-MM-DD.pdf`.
 - Truckload is a second tab (`POST /v2/tl/truckloadquotes/rates`). Those responses have no carrier name or SCAC. If the key is not enabled for truckload, the tab says so and LTL keeps working.
 
