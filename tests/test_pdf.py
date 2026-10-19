@@ -146,3 +146,69 @@ def test_pdf_mentions_capacity_partner_only_when_asked():
     assert "Priority1" in shown_text
     assert f"{quote['rates'][0]['internal']['base_total']:.2f}" not in hidden_text
     assert "Northwind Goods" in hidden_text
+
+
+def _baselines(data: bytes) -> list[tuple[str, float]]:
+    reader = PdfReader(BytesIO(data))
+    found: list[tuple[str, float]] = []
+
+    def visitor(text, _cm, tm, _font, _size):
+        if text and text.strip():
+            found.append((text, tm[5]))
+
+    reader.pages[0].extract_text(visitor_text=visitor)
+    return found
+
+
+def _baseline(rows: list[tuple[str, float]], needle: str) -> float:
+    matches = [y for text, y in rows if needle in text]
+    assert matches, needle
+    return matches[0]
+
+
+def test_pdf_section_and_card_spacing():
+    quote = quote_ltl(
+        {
+            "markup_percent": 7,
+            "origin_zip_code": "72205",
+            "origin_city": "Little Rock",
+            "origin_state_abbreviation": "AR",
+            "destination_zip_code": "60606",
+            "destination_city": "Chicago",
+            "destination_state_abbreviation": "IL",
+            "pickup_date": "2026-10-20",
+            "accessorial_services": ["LGPU", "APPT"],
+            "items": [
+                {
+                    "freight_class": "70",
+                    "packaging_type": "Pallet",
+                    "units": 1,
+                    "total_weight": 500,
+                    "length": 48,
+                    "width": 40,
+                    "height": 48,
+                    "description": "Packaged hardware",
+                }
+            ],
+        }
+    )
+    document = build_customer_quote(
+        {
+            "customer_name": "Alex Chen",
+            "company": "Northwind Goods",
+            "quote_date": "2026-10-19",
+            "shipment": quote["shipment"],
+            "options": quote["rates"],
+        }
+    )
+    rows = _baselines(render_customer_pdf(document))
+    # PDF y grows upward, so a lower baseline is further down the page.
+    company = _baseline(rows, "Northwind Goods")
+    shipment = _baseline(rows, "Shipment")
+    accessorials = _baseline(rows, "Lift Gate Pickup")
+    options = _baseline(rows, "Carrier options")
+    discount = _baseline(rows, "Carrier discount")
+    transit = _baseline(rows, "Delivers")
+    assert company - shipment >= 24
+    assert accessorials - options >= 24
+    assert discount - transit >= 14

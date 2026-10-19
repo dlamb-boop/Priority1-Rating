@@ -29,6 +29,12 @@ INK = HexColor("#061242")
 MUTED = HexColor("#3C4A78")
 LINE = HexColor("#D0DAFE")
 
+# Baseline-to-baseline lead before a section title, matching the air between
+# the shipment summary and the line-item table.
+SECTION_LEAD = 28
+# Extra room between a card's last charge and its transit line.
+TIMING_GAP = 8
+
 _FONTS_READY = False
 
 
@@ -164,15 +170,13 @@ def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: flo
     pdf.setFont("Poppins-Bold", 13)
     if not prepared:
         pdf.drawString(40, y - 18, "Prospective customer")
-        y -= 36
+        y -= 18
     else:
         pdf.drawString(40, y - 18, prepared[0])
         y -= 18
         if len(prepared) > 1:
             pdf.setFont("Poppins", 11)
             pdf.drawString(40, y - 16, prepared[1])
-            y -= 28
-        else:
             y -= 16
 
     y = _section(pdf, "Shipment", y)
@@ -233,14 +237,14 @@ def _draw_document(pdf: canvas.Canvas, document: dict, width: float, height: flo
         pdf.setFillColor(NAVY)
         pdf.setFont("Poppins", 9)
         pdf.drawString(40, y - 14, "  ·  ".join(document["shipment"]["accessorials"]))
-        y -= 32
+        y -= 14
 
     y = _section(pdf, "Carrier options", y)
     for index, option in enumerate(document["options"]):
-        block = 78 + len(option["charges"]) * 14
+        block = _card_height(len(option["charges"])) + 10
         if y - block < 96:
             y = new_page(True)
-            y = _section(pdf, "Carrier options", y)
+            y = _section(pdf, "Carrier options", y, lead=8)
         y = _option(pdf, option, index, y, width)
 
 
@@ -248,11 +252,17 @@ def _num(value: float) -> str:
     return f"{value:g}"
 
 
-def _section(pdf: canvas.Canvas, title: str, y: float) -> float:
+def _section(pdf: canvas.Canvas, title: str, y: float, *, lead: float = SECTION_LEAD) -> float:
+    y -= lead
     pdf.setFillColor(BLUE)
     pdf.setFont("Poppins-SemiBold", 11)
     pdf.drawString(40, y, title)
     return y - 18
+
+
+def _card_height(rows: int) -> float:
+    timing_gap = TIMING_GAP if rows else 0
+    return 62 + rows * 14 + (8 if rows else 0) + timing_gap
 
 
 def _table_header(pdf: canvas.Canvas, y: float, width: float) -> float:
@@ -267,7 +277,8 @@ def _table_header(pdf: canvas.Canvas, y: float, width: float) -> float:
 
 def _option(pdf: canvas.Canvas, option: dict, index: int, y: float, width: float) -> float:
     rows = len(option["charges"])
-    height = 62 + rows * 14 + (8 if rows else 0)
+    timing_gap = TIMING_GAP if rows else 0
+    height = _card_height(rows)
     pdf.setStrokeColor(BAND)
     pdf.setLineWidth(1)
     pdf.setFillColor(white)
@@ -311,7 +322,7 @@ def _option(pdf: canvas.Canvas, option: dict, index: int, y: float, width: float
     )
     pdf.setFillColor(MUTED)
     pdf.setFont("Poppins", 7.5)
-    pdf.drawString(54, (cursor + 4) if option["charges"] else y - 58, timing)
+    pdf.drawString(54, (cursor + 4 - timing_gap) if option["charges"] else y - 58, timing)
     return y - height - 10
 
 
